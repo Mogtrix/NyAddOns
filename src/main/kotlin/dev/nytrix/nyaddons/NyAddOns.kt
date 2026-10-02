@@ -7,6 +7,7 @@ import dev.nytrix.nyaddons.core.SkyBlockData
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.core.WorldRenderer
 import dev.nytrix.nyaddons.features.Features
+import dev.nytrix.nyaddons.gui.ConfigTheme
 import dev.nytrix.nyaddons.gui.OverlayManager
 import dev.nytrix.nyaddons.gui.PositionEditorScreen
 import io.github.notenoughupdates.moulconfig.managed.ManagedConfig
@@ -47,6 +48,7 @@ object NyAddOns : ClientModInitializer {
         managedConfig = ManagedConfig.create(File(directory, "config.json"), NyConfig::class.java)
         Storage.load(File(directory, "data.json"))
 
+        ConfigTheme.init()
         OverlayManager.init()
         Features.all.forEach { it.init() }
         registerEvents()

@@ -4,7 +4,9 @@ import com.google.gson.annotations.Expose
 import dev.nytrix.nyaddons.NyAddOns
 import io.github.notenoughupdates.moulconfig.Config
 import io.github.notenoughupdates.moulconfig.annotations.Category
+import dev.nytrix.nyaddons.gui.ConfigTheme
 import io.github.notenoughupdates.moulconfig.common.text.StructuredText
+import io.github.notenoughupdates.moulconfig.processor.ProcessedCategory
 
 /**
  * Root of the config screen. Each field is one category in the left-hand list.
@@ -12,7 +14,14 @@ import io.github.notenoughupdates.moulconfig.common.text.StructuredText
  */
 class NyConfig : Config() {
 
-    override fun getTitle(): StructuredText = StructuredText.of("NyAddOns ${NyAddOns.VERSION} by Nytrix")
+    override fun getTitle(): StructuredText = StructuredText.of("NyAddOns ${NyAddOns.VERSION}")
+
+    override fun formatCategoryName(category: ProcessedCategory, isSelected: Boolean): StructuredText =
+        if (isSelected) {
+            category.displayName.copyShallow().underlined().withColour(ConfigTheme.ACCENT)
+        } else {
+            super.formatCategoryName(category, isSelected)
+        }
 
     @Expose
     @Category(name = "GUI", desc = "Move and resize every NyAddOns overlay.")

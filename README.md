@@ -37,7 +37,8 @@ The mod jar is `build/libs/NyAddOns-<version>.jar`. Needs JDK 25 or newer.
 
 `./gradlew runClientGameTest` launches the game, runs the in-game tests in `src/gametest`
 against a fake name tag and fake chat lines, and saves screenshots to
-`build/run/clientGameTest/screenshots`.
+`build/run/clientGameTest/screenshots`. `./gradlew prodClientGameTest` does the same against
+the finished mod jar, which also checks the packaging. The pictures in `screenshots/` come from it.
 
 ## Adding a feature
 
@@ -52,7 +53,8 @@ beams and floating text) and `gui/` (overlays and the position editor).
 ## Licence
 
 MIT, see `LICENSE`. The config screen is [MoulConfig](https://github.com/NotEnoughUpdates/MoulConfig)
-(LGPL-3.0), bundled unmodified under a relocated package; its licence is included in the jar
-as `LICENSE_MoulConfig`.
+(LGPL-3.0), bundled under a relocated package; its licence is included in the jar as
+`LICENSE_MoulConfig`. The textures in `assets/nyaddons/moulconfig` are recoloured copies of
+MoulConfig's, and `gui/ConfigTheme.kt` swaps its panel colours for a neutral grey and blue palette.
 
 Not affiliated with Hypixel or SkyHanni. Mods are used on Hypixel at your own risk.

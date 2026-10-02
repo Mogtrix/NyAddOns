@@ -7,12 +7,12 @@ import net.minecraft.network.chat.TextColor
 
 object ChatUtils {
 
-    private const val PREFIX = "[Ny]"
-    private const val PREFIX_START = 0xFFFF55
-    private const val PREFIX_END = 0xFFAA00
+    // Brackets in the config screen's panel colour, name in its title colour.
+    private const val BRACKET_COLOR = 0x1E1E1E
+    private const val NAME_COLOR = 0xA0A0A0
     private val colorCode = Regex("§.")
 
-    /** Sends a client-side chat message: gradient prefix, yellow text. § colour codes work in [message]. */
+    /** Sends a client-side chat message: prefix, then yellow text. § colour codes work in [message]. */
     fun chat(message: String) {
         val mc = Minecraft.getInstance()
         mc.execute {
@@ -22,22 +22,9 @@ object ChatUtils {
 
     fun stripColor(text: String): String = colorCode.replace(text, "")
 
-    private fun prefix(): MutableComponent {
-        val result = Component.empty()
-        val last = (PREFIX.length - 1).coerceAtLeast(1)
-        PREFIX.forEachIndexed { index, char ->
-            val rgb = lerpRgb(PREFIX_START, PREFIX_END, index.toFloat() / last)
-            result.append(Component.literal(char.toString()).withStyle { it.withColor(TextColor.fromRgb(rgb)) })
-        }
-        return result
-    }
+    private fun prefix(): MutableComponent =
+        colored("[", BRACKET_COLOR).append(colored("Ny", NAME_COLOR)).append(colored("]", BRACKET_COLOR))
 
-    private fun lerpRgb(from: Int, to: Int, progress: Float): Int {
-        fun channel(shift: Int): Int {
-            val a = (from shr shift) and 0xFF
-            val b = (to shr shift) and 0xFF
-            return (a + (b - a) * progress).toInt() and 0xFF
-        }
-        return (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
-    }
+    private fun colored(text: String, rgb: Int): MutableComponent =
+        Component.literal(text).withStyle { it.withColor(TextColor.fromRgb(rgb)) }
 }

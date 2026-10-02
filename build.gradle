@@ -19,6 +19,17 @@ configurations {
 	// Libraries that get bundled (and relocated) into the mod jar.
 	shadowImpl
 	implementation.extendsFrom shadowImpl
+	moulconfigJar
+}
+
+// MoulConfig without its platform registration, so that NyPlatform (the recoloured one) is the only
+// platform it finds. See src/main/resources/META-INF/services.
+def strippedMoulConfig = tasks.register('strippedMoulConfig', Jar) {
+	archiveBaseName = 'moulconfig-stripped'
+	archiveVersion = project.moulconfig_version
+	destinationDirectory = layout.buildDirectory.dir('moulconfig')
+	from { zipTree(configurations.moulconfigJar.singleFile) }
+	exclude 'META-INF/services/**'
 }
 
 loom {
@@ -49,9 +60,10 @@ dependencies {
 	implementation "net.fabricmc:fabric-language-kotlin:${project.fabric_kotlin_version}"
 
 	// The config screen library SkyHanni uses.
-	shadowImpl("org.notenoughupdates.moulconfig:modern-26.1:${project.moulconfig_version}") {
+	moulconfigJar("org.notenoughupdates.moulconfig:modern-26.1:${project.moulconfig_version}") {
 		transitive = false
 	}
+	shadowImpl files(strippedMoulConfig)
 }
 
 processResources {
@@ -90,10 +102,36 @@ shadowJar {
 	configurations = [project.configurations.shadowImpl]
 	archiveClassifier = ''
 	relocate 'io.github.notenoughupdates.moulconfig', 'dev.nytrix.nyaddons.deps.moulconfig'
-	mergeServiceFiles()
+	// src/main/resources carries the service file under its relocated name, pointing at NyPlatform.
+	exclude 'META-INF/services/io.github.notenoughupdates.moulconfig.common.IMinecraft'
 	// MoulConfig's own access widener is replaced by nyaddons.accesswidener; its licence text is kept.
 	exclude 'moulconfig.accesswidener'
 	rename { it == 'LICENSE' ? 'LICENSE_MoulConfig' : it }
 }
 
 assemble.dependsOn shadowJar
+
+// The in-game tests again, but against the finished mod jar in a production-style launch:
+// `./gradlew prodClientGameTest`. Catches packaging mistakes the development run cannot.
+configurations {
+	productionRuntimeMods
+}
+
+dependencies {
+	productionRuntimeMods "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	productionRuntimeMods "net.fabricmc:fabric-language-kotlin:${project.fabric_kotlin_version}"
+}
+
+def gametestJar = tasks.register('gametestJar', Jar) {
+	archiveClassifier = 'gametest'
+	from sourceSets.gametest.output
+}
+
+tasks.register('prodClientGameTest', net.fabricmc.loom.task.prod.ClientProductionRunTask) {
+	mods.setFrom(shadowJar, gametestJar, configurations.productionRuntimeMods)
+	jvmArgs.add('-Dfabric.client.gametest')
+	runDir = layout.buildDirectory.dir('run/prodClientGameTest')
+	doFirst {
+		delete runDir
+	}
+}

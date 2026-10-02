@@ -9,15 +9,15 @@ import io.github.notenoughupdates.moulconfig.annotations.ConfigOption
 /** Where an overlay or alert is allowed to show. */
 enum class AreaMode(private val displayName: String) {
     ALL_ISLANDS("All islands"),
-    FORAGING_ISLANDS("Only on foraging islands"),
+    FORAGING_ISLANDS("Foraging only"),
     ;
 
     override fun toString() = displayName
 }
 
 enum class BeamMode(private val displayName: String) {
-    ALL_TREES("All tracked trees"),
-    READY_TREES("Only ready trees"),
+    ALL_TREES("All trees"),
+    READY_TREES("Ready only"),
     OFF("Off"),
     ;
 

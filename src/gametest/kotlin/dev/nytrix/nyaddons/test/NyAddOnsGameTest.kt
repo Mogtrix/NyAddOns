@@ -107,20 +107,62 @@ class NyAddOnsGameTest : FabricClientGameTest {
             context.takeScreenshot("5-dragged")
             context.setScreen { null }
 
-            context.onClient { NyAddOns.openConfig() }
-            context.waitFor { it.screen != null }
+            // The config screen, in a taller window so each page of options fits in few screenshots.
+            context.input.resizeWindow(854, 980)
             context.waitTicks(10)
-            context.takeScreenshot("6-config")
-
-            // The Foraging category, second entry in the list on the left.
             val guiScale = context.computeOnClient<Double, RuntimeException> { it.window.screenWidth.toDouble() / it.window.guiScaledWidth }
             val width = context.computeOnClient<Int, RuntimeException> { it.window.guiScaledWidth }
             val height = context.computeOnClient<Int, RuntimeException> { it.window.guiScaledHeight }
-            context.input.setCursorPos((width / 2.0 - 115) * guiScale, (height / 2.0 - 10) * guiScale)
-            context.waitTick()
-            context.input.pressMouse(0)
+            val top = (height - minOf(height - 50, 400)) / 2.0
+            val optionsX = width / 2.0 + 66
+
+            fun moveTo(x: Double, y: Double) {
+                context.input.setCursorPos(x * guiScale, y * guiScale)
+                context.waitTick()
+            }
+
+            fun clickAt(x: Double, y: Double) {
+                moveTo(x, y)
+                context.input.pressMouse(0)
+                context.waitTicks(5)
+            }
+
+            fun openForaging() {
+                context.onClient { NyAddOns.openConfig() }
+                context.waitFor { it.screen != null }
+                context.waitTicks(10)
+                clickAt(width / 2.0 - 115, top + 85)
+            }
+
+            fun pageThrough(name: String, pages: Int) {
+                moveTo(optionsX, top + 200)
+                for (page in 1..pages) {
+                    context.takeScreenshot("$name-$page")
+                    repeat(12) {
+                        context.input.scroll(-3.0)
+                        context.waitTicks(3)
+                    }
+                    context.waitTicks(20)
+                }
+            }
+
+            context.onClient { NyAddOns.openConfig() }
+            context.waitFor { it.screen != null }
             context.waitTicks(10)
+            context.takeScreenshot("6-config-gui")
+            clickAt(width / 2.0 - 115, top + 85)
             context.takeScreenshot("7-config-foraging")
+
+            // First accordion: honeycomb trees.
+            clickAt(optionsX, top + 73)
+            pageThrough("8-honeycomb-options", 3)
+            context.setScreen { null }
+
+            // Second accordion: honeyhives. Close the first one again so the second sits at a known place.
+            openForaging()
+            clickAt(optionsX, top + 73)
+            clickAt(optionsX, top + 98)
+            pageThrough("9-honeyhive-options", 2)
             context.setScreen { null }
         }
         System.clearProperty("nyaddons.devArea")
