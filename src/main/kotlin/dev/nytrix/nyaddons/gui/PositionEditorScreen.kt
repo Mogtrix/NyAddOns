@@ -23,7 +23,7 @@ class PositionEditorScreen : Screen(Component.literal("NyAddOns Position Editor"
     }
 
     private fun boxes() = OverlayManager.overlays.map { overlay ->
-        val content = overlay.content() ?: overlay.example()
+        val content = overlay.current() ?: overlay.example()
         val scale = OverlayManager.scaleOf(overlay.position())
         Box(overlay, content, (content.width * scale).roundToInt(), (content.height * scale).roundToInt())
     }

@@ -20,21 +20,34 @@ object FusionRepo {
     var data: FusionData? = null
         private set
 
-    fun load(directory: File) {
-        val recipesFile = File(directory, "fusion-data.json")
-        val ratesFile = File(directory, "fusion-rates.json")
+    private var loading = false
+
+    /** Starts loading the data if that has not happened yet. It is only needed once a shard is tracked. */
+    @Synchronized
+    fun request() {
+        if (loading || data != null) return
+        loading = true
+        val recipesFile = File(NyAddOns.directory, "fusion-data.json")
+        val ratesFile = File(NyAddOns.directory, "fusion-rates.json")
         Thread({
             read(recipesFile, ratesFile)
-            val newRecipes = Downloads.json(BASE_URL + "fusion-data.json", recipesFile)
-            val newRates = Downloads.json(BASE_URL + "rates.json", ratesFile)
-            if (newRecipes || newRates) read(recipesFile, ratesFile)
+            val newRecipes = Downloads.refresh(BASE_URL + "fusion-data.json", recipesFile)
+            val newRates = Downloads.refresh(BASE_URL + "rates.json", ratesFile)
+            if (newRecipes || newRates || data == null) read(recipesFile, ratesFile)
+            synchronized(this) { loading = false }
         }, "NyAddOns fusion data").apply { isDaemon = true }.start()
+    }
+
+    /** Drops the data to free its memory. [request] loads it again. */
+    @Synchronized
+    fun release() {
+        if (!loading) data = null
     }
 
     private fun read(recipesFile: File, ratesFile: File) {
         if (!recipesFile.exists() || !ratesFile.exists()) return
         try {
-            data = FusionData(recipesFile.readText(), ratesFile.readText())
+            data = FusionData({ recipesFile.bufferedReader() }, ratesFile.readText())
         } catch (e: Exception) {
             NyAddOns.logger.error("Could not read the fusion data", e)
         }
@@ -50,7 +63,10 @@ object FusionTracker : Feature {
     class Target(val shard: Shard, val quantity: Int, val plan: FusionPlan)
 
     private val config get() = NyAddOns.config.hunting.fusionTracker
-    private val worker = Executors.newSingleThreadExecutor { Thread(it, "NyAddOns fusion calculator").apply { isDaemon = true } }
+    private val treeConfig get() = NyAddOns.config.hunting.fusionTree
+    private val worker by lazy {
+        Executors.newSingleThreadExecutor { Thread(it, "NyAddOns fusion calculator").apply { isDaemon = true } }
+    }
 
     /** The tracked shards that still need levelling, each with its worked-out fusion tree. */
     @Volatile
@@ -61,14 +77,14 @@ object FusionTracker : Feature {
     private var busy = false
     private var lastRequest: Any? = null
 
-    // Only touched on the worker thread. Solving is the slow part, so it is reused until the settings change.
+    // Solving is the slow part, so the solved calculator is reused until the settings change.
+    @Volatile
     private var calculator: Triple<FusionData, FusionParams, FusionCalculator>? = null
 
     /** True once the tree for the current tracked shards has been worked out. */
     val upToDate get() = lastRequest != null && !busy
 
     override fun init() {
-        FusionRepo.load(NyAddOns.directory)
         NyEvents.second += ::refresh
         OverlayManager.register(
             Overlay(
@@ -103,8 +119,16 @@ object FusionTracker : Feature {
     }
 
     private fun refresh() {
-        if (!config.enabled) return
-        val data = FusionRepo.data ?: return
+        // The materials overlay and the tree in the fusion menus both run on these results.
+        if (!config.enabled && !treeConfig.enabled) {
+            if (lastRequest != null && !busy) {
+                targets = emptyList()
+                lastRequest = null
+                calculator = null
+                FusionRepo.release()
+            }
+            return
+        }
         if (!ShardRepo.loaded || busy) return
 
         val wanted = ShardTracker.trackedShards().filter { it.consumable }.mapNotNull { shard ->
@@ -112,6 +136,13 @@ object FusionTracker : Feature {
             val needed = ShardTracker.neededToMax(shard) ?: (ShardRepo.totalToMax(shard) - owned)
             if (needed > 0) shard to needed else null
         }
+        // The recipe data is only loaded once something needs a tree.
+        if (wanted.isEmpty() && FusionRepo.data == null) {
+            targets = emptyList()
+            return
+        }
+        FusionRepo.request()
+        val data = FusionRepo.data ?: return
         val params = currentParams()
         val request = Triple(data, params, wanted.map { it.first.id to it.second })
         if (request == lastRequest) return

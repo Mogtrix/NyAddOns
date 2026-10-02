@@ -13,15 +13,15 @@ import java.util.UUID
 
 object ShardIcons {
 
-    private val icons = HashMap<String, ItemStack>()
-
     /** Used where no shard's own icon is available. */
     val generic: ItemStack by lazy { ItemStack(Items.PRISMARINE_SHARD) }
 
-    /** The shard's own head when its skin is known, a plain shard otherwise. */
-    fun of(shard: Shard): ItemStack = icons.getOrPut(shard.id + (shard.texture != null)) {
-        val texture = shard.texture ?: return@getOrPut generic
-        try {
+    /** The shard's own head when its skin is known, a plain shard otherwise. Built once per shard. */
+    fun of(shard: Shard): ItemStack {
+        shard.icon?.let { return it }
+        // Not remembered while the icon list is still downloading, so the real icon appears once it is there.
+        val texture = ShardRepo.textureOf(shard) ?: return generic
+        val icon = try {
             val properties = PropertyMap(ImmutableMultimap.of("textures", Property("textures", texture)))
             val profile = GameProfile(UUID.nameUUIDFromBytes(shard.id.toByteArray()), "", properties)
             ItemStack(Items.PLAYER_HEAD).apply { set(DataComponents.PROFILE, ResolvableProfile.createResolved(profile)) }
@@ -29,5 +29,7 @@ object ShardIcons {
             NyAddOns.logger.warn("Could not build the icon for ${shard.name}", e)
             generic
         }
+        shard.icon = icon
+        return icon
     }
 }

@@ -2,7 +2,11 @@ package dev.nytrix.nyaddons.core
 
 import com.google.gson.GsonBuilder
 import dev.nytrix.nyaddons.NyAddOns
+import net.minecraft.network.chat.Component
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.concurrent.Executors
 
 /** One tree with honeycomb on it. Times are epoch milliseconds so they survive restarts. */
 class TrackedTree(
@@ -16,6 +20,13 @@ class TrackedTree(
 ) {
     @Transient
     var missedScans = 0
+
+    // The floating text, rebuilt when the second changes.
+    @Transient
+    var label: Component? = null
+
+    @Transient
+    var labelSecond = -1L
 }
 
 /** What is known about one shard. A null number means the game has not shown it to the mod yet. */
@@ -44,6 +55,7 @@ object Storage {
     private val gson = GsonBuilder().setPrettyPrinting().create()
     private lateinit var file: File
     private var dirty = false
+    private val writer = Executors.newSingleThreadExecutor { Thread(it, "NyAddOns save").apply { isDaemon = true } }
 
     var data = StorageData()
         private set
@@ -78,17 +90,24 @@ object Storage {
         dirty = true
     }
 
-    fun saveIfDirty() {
+    /**
+     * Writes the data file if anything changed. The file is written on a background thread so a
+     * slow disk never stalls a frame; pass [wait] when the game is closing.
+     */
+    fun saveIfDirty(wait: Boolean = false) {
         if (!dirty) return
         dirty = false
-        try {
-            file.parentFile.mkdirs()
-            val temp = File(file.parentFile, file.name + ".tmp")
-            temp.writeText(gson.toJson(data))
-            temp.copyTo(file, overwrite = true)
-            temp.delete()
-        } catch (e: Exception) {
-            NyAddOns.logger.error("Could not save ${file.name}", e)
+        val json = gson.toJson(data)
+        val write = writer.submit {
+            try {
+                file.parentFile.mkdirs()
+                val temp = File(file.parentFile, file.name + ".tmp")
+                temp.writeText(json)
+                Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (e: Exception) {
+                NyAddOns.logger.error("Could not save ${file.name}", e)
+            }
         }
+        if (wait) write.get()
     }
 }

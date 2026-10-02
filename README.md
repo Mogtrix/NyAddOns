@@ -78,6 +78,11 @@ against a fake name tag and fake chat lines, and saves screenshots to
 `build/run/clientGameTest/screenshots`. `./gradlew prodClientGameTest` does the same against
 the finished mod jar, which also checks the packaging. The pictures in `screenshots/` come from it.
 
+The game test also logs `[NyBench]` lines: the cost of the work the mod does every frame, tick,
+second and chat line. Overlays and the fusion tree are rebuilt four times a second and reused in
+between, menus are only re-read when an item in them changes, and downloaded lists are refreshed
+at most once a day.
+
 ## Adding a feature
 
 1. Add its options to a config class in `config/` (a new `@Category` in `NyConfig` for a new area).

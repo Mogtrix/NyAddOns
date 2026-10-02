@@ -1,8 +1,12 @@
 package dev.nytrix.nyaddons.features.hunting
 
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.stream.JsonReader
+import com.google.gson.stream.JsonToken
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.Downloads
+import net.minecraft.world.item.ItemStack
 import java.io.File
 
 enum class ShardRarity(val color: String) {
@@ -27,9 +31,11 @@ class Shard(
     val attribute: String,
     val code: String,
     val consumable: Boolean,
-    val texture: String?,
 ) {
-    val coloredName get() = rarity.color + name
+    val coloredName = rarity.color + name
+
+    /** Built by [ShardIcons] the first time the shard is drawn. */
+    var icon: ItemStack? = null
 }
 
 /**
@@ -82,29 +88,33 @@ object ShardRepo {
         return steps(shard).takeWhile { step -> (left >= step).also { left -= step } }.size
     }
 
+    // The picker's and diagram's icons: shard id to skin texture. Only read when an icon is first drawn.
+    @Volatile
+    private var texturesFile: File? = null
+    private val textures: Map<String, String> by lazy { readTextures(texturesFile) }
+
+    /** The shard's head skin, or null while the icon list is not on disk yet. */
+    fun textureOf(shard: Shard): String? = if (texturesFile == null) null else textures[shard.id]
+
     fun load(directory: File) {
         val shardsFile = File(directory, "attribute_shards.json")
-        val iconsFile = File(directory, "shard_icons.json")
-        readFiles(shardsFile, iconsFile)
+        read(shardsFile)
         Thread({
-            val refreshed = Downloads.json(SHARDS_URL, shardsFile)
-            // The icon file is large and rarely changes, so it is only fetched once.
-            val gotIcons = !iconsFile.exists() && Downloads.json(ICONS_URL, iconsFile)
-            if (refreshed || gotIcons) readFiles(shardsFile, iconsFile)
+            if (Downloads.refresh(SHARDS_URL, shardsFile)) read(shardsFile)
+            texturesFile = prepareTextures(directory)
         }, "NyAddOns shard list").apply { isDaemon = true }.start()
     }
 
-    private fun readFiles(shardsFile: File, iconsFile: File) {
+    private fun read(shardsFile: File) {
         if (!shardsFile.exists()) return
         try {
-            val textures = if (iconsFile.exists()) parseIcons(iconsFile.readText()) else emptyMap()
-            snapshot = parse(shardsFile.readText(), textures)
+            snapshot = parse(shardsFile.readText())
         } catch (e: Exception) {
             NyAddOns.logger.error("Could not read the shard list", e)
         }
     }
 
-    private fun parse(json: String, textures: Map<String, String>): Snapshot {
+    private fun parse(json: String): Snapshot {
         val root = JsonParser.parseString(json).asJsonObject
         val unconsumable = root.getAsJsonArray("unconsumable_attributes").map { it.asString }.toSet()
         val levelling = root.getAsJsonObject("attribute_levelling").entrySet().associate { (rarity, steps) ->
@@ -114,19 +124,54 @@ object ShardRepo {
             val entry = element.asJsonObject
             val id = entry["bazaarName"].asString
             val rarity = ShardRarity.entries.find { it.name == entry["rarity"].asString } ?: return@mapNotNull null
-            Shard(
-                id, entry["displayName"].asString, rarity, entry["abilityName"].asString,
-                entry["shardId"].asString, id !in unconsumable, textures[id],
-            )
+            Shard(id, entry["displayName"].asString, rarity, entry["abilityName"].asString, entry["shardId"].asString, id !in unconsumable)
         }
         return Snapshot(shards, levelling)
     }
 
-    private fun parseIcons(json: String): Map<String, String> =
-        JsonParser.parseString(json).asJsonArray.mapNotNull { element ->
-            val entry = element.asJsonObject
-            val id = entry["shard_id"]?.asString ?: return@mapNotNull null
-            val texture = entry["texture"]?.takeIf { it.isJsonPrimitive }?.asString ?: return@mapNotNull null
-            id to texture
-        }.toMap()
+    /**
+     * The icon source is a 1 MB file of which only two fields per shard are used, so it is cut
+     * down to those once and the small copy is what gets read from then on.
+     */
+    private fun prepareTextures(directory: File): File? {
+        val slim = File(directory, "shard_textures.json")
+        if (slim.exists()) return slim
+        val full = File(directory, "shard_icons.json")
+        if (!full.exists()) Downloads.refresh(ICONS_URL, full)
+        if (!full.exists()) return null
+        return try {
+            val result = JsonObject()
+            full.bufferedReader().use { source ->
+                val reader = JsonReader(source)
+                reader.beginArray()
+                while (reader.hasNext()) {
+                    var id: String? = null
+                    var texture: String? = null
+                    reader.beginObject()
+                    while (reader.hasNext()) {
+                        when (reader.nextName()) {
+                            "shard_id" -> id = reader.nextString()
+                            "texture" -> if (reader.peek() == JsonToken.STRING) texture = reader.nextString() else reader.skipValue()
+                            else -> reader.skipValue()
+                        }
+                    }
+                    reader.endObject()
+                    if (id != null && texture != null) result.addProperty(id, texture)
+                }
+            }
+            slim.writeText(result.toString())
+            full.delete()
+            slim
+        } catch (e: Exception) {
+            NyAddOns.logger.warn("Could not read the shard icon list", e)
+            null
+        }
+    }
+
+    private fun readTextures(file: File?): Map<String, String> = try {
+        JsonParser.parseString(file!!.readText()).asJsonObject.entrySet().associate { it.key to it.value.asString }
+    } catch (e: Exception) {
+        NyAddOns.logger.warn("Could not read the shard icons", e)
+        emptyMap()
+    }
 }

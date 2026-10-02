@@ -13,9 +13,11 @@ import dev.nytrix.nyaddons.core.WorldRenderer
 import dev.nytrix.nyaddons.features.Feature
 import dev.nytrix.nyaddons.gui.Overlay
 import dev.nytrix.nyaddons.gui.OverlayManager
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext
 import net.minecraft.client.Minecraft
 import net.minecraft.core.BlockPos
 import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.decoration.ArmorStand
 import net.minecraft.world.level.Level
 import kotlin.math.abs
@@ -29,6 +31,8 @@ object HoneycombTreeTimer : Feature {
 
     private val nameTag = Regex("Critter in:\\s*((?:\\d+\\s*[dhms]\\s*)+)")
 
+    private const val NAME_TAG_MARKER = "Critter"
+    private const val SCAN_RADIUS_SQ = 64.0 * 64.0
     private const val SAME_TREE_RADIUS_SQ = 4.0 * 4.0
     private const val COLLECT_RADIUS_SQ = 10.0 * 10.0
     private const val STALE_RADIUS_SQ = 8.0 * 8.0
@@ -74,8 +78,10 @@ object HoneycombTreeTimer : Feature {
         val seen = HashSet<TrackedTree>()
 
         for (entity in level.entitiesForRendering()) {
-            if (entity !is ArmorStand) continue
+            // Islands are full of hologram stands; almost all are dropped by these cheap checks.
+            if (entity !is ArmorStand || player.distanceToSqr(entity) > SCAN_RADIUS_SQ) continue
             val name = entity.customName?.string ?: continue
+            if (NAME_TAG_MARKER !in name) continue
             val match = nameTag.find(ChatUtils.stripColor(name)) ?: continue
             val left = TimeUtils.parse(match.groupValues[1]) ?: continue
             val tree = trees.firstOrNull {
@@ -137,16 +143,29 @@ object HoneycombTreeTimer : Feature {
         }
     }
 
-    private fun onWorldRender(renderer: WorldRenderer) {
-        if (!config.enabled || config.beams == BeamMode.OFF) return
+    private fun onWorldRender(context: LevelRenderContext) {
+        if (trees.isEmpty() || !config.enabled || config.beams == BeamMode.OFF) return
+        val area = SkyBlockData.area
+        if (trees.none { it.area == area }) return
+        val renderer = WorldRenderer(context)
         val now = System.currentTimeMillis()
         for (tree in trees) {
-            if (tree.area != SkyBlockData.area) continue
+            if (tree.area != area) continue
             val ready = now >= tree.readyAt
             if (!ready && config.beams == BeamMode.READY_TREES) continue
             renderer.beam(tree.x, tree.y, tree.z, if (ready) READY_COLOR else WAITING_COLOR)
-            if (config.floatingText) renderer.text(tree.x, tree.y + FLOATING_TEXT_HEIGHT, tree.z, timeText(tree, now))
+            if (config.floatingText) renderer.text(tree.x, tree.y + FLOATING_TEXT_HEIGHT, tree.z, label(tree, now))
         }
+    }
+
+    /** The floating text, built once a second instead of once a frame. */
+    private fun label(tree: TrackedTree, now: Long): Component {
+        val second = now / 1000
+        return tree.label?.takeIf { tree.labelSecond == second }
+            ?: Component.literal(timeText(tree, now)).also {
+                tree.label = it
+                tree.labelSecond = second
+            }
     }
 
     private fun timeText(tree: TrackedTree, now: Long): String {

@@ -6,15 +6,27 @@
  */
 package dev.nytrix.nyaddons.features.hunting
 
-import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.stream.JsonReader
+import java.io.Reader
+import java.io.StringReader
+import java.util.TreeMap
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToLong
 
-/** SkyShards' fusion data: every shard, and every pair of shards that fuses into it. */
-class FusionData(json: String, ratesJson: String) {
+/**
+ * SkyShards' fusion data: every shard, and every pair of shards that fuses into it.
+ *
+ * The recipe file is about 3 MB and holds some 300,000 recipes, so it is read as a stream
+ * straight into compact arrays: nothing of the JSON itself stays in memory.
+ *
+ * @param open opens the recipe file; it is read twice, once for the shards and once for the recipes
+ */
+class FusionData(open: () -> Reader, ratesJson: String) {
+
+    constructor(json: String, ratesJson: String) : this({ StringReader(json) }, ratesJson)
 
     /** Shard codes like `R34`, in file order. Everything else is indexed by position in this list. */
     val ids: List<String>
@@ -24,46 +36,147 @@ class FusionData(json: String, ratesJson: String) {
     val reptile: BooleanArray
     val defaultRate: DoubleArray
 
-    /** Recipes per output shard, as parallel arrays. */
-    class Recipes(val input1: IntArray, val input2: IntArray, val output: IntArray, val reptile: BooleanArray) {
-        val size get() = input1.size
+    /** The recipes that make one shard: two ingredients and how many come out. */
+    class Recipes(
+        private val first: ShortArray,
+        private val second: ShortArray,
+        private val amounts: ByteArray,
+        private val reptileShard: BooleanArray,
+    ) {
+        val size get() = first.size
+        fun input1(recipe: Int) = first[recipe].toInt()
+        fun input2(recipe: Int) = second[recipe].toInt()
+        fun output(recipe: Int) = amounts[recipe].toInt()
+        fun reptile(recipe: Int) = reptileShard[first[recipe].toInt()] || reptileShard[second[recipe].toInt()]
     }
 
     val recipes: List<Recipes>
 
+    /** For each shard, the shards it is an ingredient of, in the order the recipes list them. */
+    val dependents: List<IntArray>
+
     init {
-        val root = JsonParser.parseString(json).asJsonObject
-        val shards = root.getAsJsonObject("shards")
-        ids = shards.keySet().toList()
-        indexOf = ids.withIndex().associate { it.value to it.index }
-        val entries = ids.map { shards.getAsJsonObject(it) }
-        rarity = entries.map { it["rarity"].asString.lowercase() }
-        fuseAmount = IntArray(ids.size) { entries[it]["fuse_amount"].asInt }
-        reptile = BooleanArray(ids.size) { "Reptile" in entries[it]["family"].asString }
+        val names = ArrayList<String>()
+        val rarities = ArrayList<String>()
+        val fuseAmounts = ArrayList<Int>()
+        val reptiles = ArrayList<Boolean>()
+        section(open, "shards") { reader ->
+            reader.beginObject()
+            while (reader.hasNext()) {
+                names += reader.nextName()
+                var shardRarity = ""
+                var amount = 0
+                var isReptile = false
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    when (reader.nextName()) {
+                        "rarity" -> shardRarity = reader.nextString().lowercase()
+                        "fuse_amount" -> amount = reader.nextInt()
+                        "family" -> isReptile = "Reptile" in reader.nextString()
+                        else -> reader.skipValue()
+                    }
+                }
+                reader.endObject()
+                rarities += shardRarity
+                fuseAmounts += amount
+                reptiles += isReptile
+            }
+            reader.endObject()
+        }
+        ids = names
+        indexOf = HashMap<String, Int>(names.size * 2).apply { names.forEachIndexed { index, id -> put(id, index) } }
+        rarity = rarities
+        fuseAmount = fuseAmounts.toIntArray()
+        reptile = reptiles.toBooleanArray()
 
         val rates = JsonParser.parseString(ratesJson).asJsonObject
         defaultRate = DoubleArray(ids.size) { rates[ids[it]]?.asDouble ?: 0.0 }
 
-        val allRecipes = root.getAsJsonObject("recipes")
-        recipes = ids.map { id -> readRecipes(allRecipes.getAsJsonObject(id)) }
-    }
+        val none = Recipes(ShortArray(0), ShortArray(0), ByteArray(0), reptile)
+        val byShard = MutableList(ids.size) { none }
+        section(open, "recipes") { reader ->
+            reader.beginObject()
+            while (reader.hasNext()) byShard[indexOf.getValue(reader.nextName())] = readRecipes(reader)
+            reader.endObject()
+        }
+        recipes = byShard
 
-    private fun readRecipes(byQuantity: JsonObject?): Recipes {
-        val input1 = ArrayList<Int>()
-        val input2 = ArrayList<Int>()
-        val output = ArrayList<Int>()
-        // Lowest output quantity first, the order the original calculator sees them in.
-        for (quantity in byQuantity?.keySet().orEmpty().sortedBy { it.toInt() }) {
-            for (pair in byQuantity!!.getAsJsonArray(quantity)) {
-                input1 += indexOf.getValue(pair.asJsonArray[0].asString)
-                input2 += indexOf.getValue(pair.asJsonArray[1].asString)
-                output += quantity.toInt()
+        val lists = List(ids.size) { IntList() }
+        for (output in ids.indices) {
+            val made = recipes[output]
+            for (recipe in 0 until made.size) {
+                // Outputs are visited in order, so a repeat can only be the entry just added.
+                lists[made.input1(recipe)].addIfNew(output)
+                lists[made.input2(recipe)].addIfNew(output)
             }
         }
-        return Recipes(
-            input1.toIntArray(), input2.toIntArray(), output.toIntArray(),
-            BooleanArray(input1.size) { reptile[input1[it]] || reptile[input2[it]] },
-        )
+        dependents = lists.map { it.toArray() }
+    }
+
+    /** Runs [read] on the value of one top-level key of the recipe file, skipping the rest. */
+    private fun section(open: () -> Reader, name: String, read: (JsonReader) -> Unit) {
+        open().use { source ->
+            val reader = JsonReader(source)
+            reader.beginObject()
+            while (reader.hasNext()) {
+                if (reader.nextName() == name) read(reader) else reader.skipValue()
+            }
+            reader.endObject()
+        }
+    }
+
+    private fun readRecipes(reader: JsonReader): Recipes {
+        // Lowest output quantity first, the order the original calculator sees them in.
+        val byQuantity = TreeMap<Int, IntList>()
+        reader.beginObject()
+        while (reader.hasNext()) {
+            val pairs = byQuantity.getOrPut(reader.nextName().toInt()) { IntList() }
+            reader.beginArray()
+            while (reader.hasNext()) {
+                reader.beginArray()
+                pairs.add(indexOf.getValue(reader.nextString()))
+                pairs.add(indexOf.getValue(reader.nextString()))
+                reader.endArray()
+            }
+            reader.endArray()
+        }
+        reader.endObject()
+
+        val total = byQuantity.values.sumOf { it.size } / 2
+        val first = ShortArray(total)
+        val second = ShortArray(total)
+        val amounts = ByteArray(total)
+        var next = 0
+        for ((quantity, pairs) in byQuantity) {
+            check(quantity in 1..Byte.MAX_VALUE) { "Unexpected fusion output quantity $quantity" }
+            for (pair in 0 until pairs.size / 2) {
+                first[next] = pairs[pair * 2].toShort()
+                second[next] = pairs[pair * 2 + 1].toShort()
+                amounts[next] = quantity.toByte()
+                next++
+            }
+        }
+        return Recipes(first, second, amounts, reptile)
+    }
+
+    /** A growable int array, to avoid boxing hundreds of thousands of numbers while reading. */
+    private class IntList {
+        private var values = IntArray(16)
+        var size = 0
+            private set
+
+        operator fun get(index: Int) = values[index]
+
+        fun add(value: Int) {
+            if (size == values.size) values = values.copyOf(size * 2)
+            values[size++] = value
+        }
+
+        fun addIfNew(value: Int) {
+            if (size == 0 || values[size - 1] != value) add(value)
+        }
+
+        fun toArray() = values.copyOf(size)
     }
 }
 
@@ -202,21 +315,12 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
     // Cheapest way to get each shard
 
     private fun effectiveOutput(recipes: FusionData.Recipes, recipe: Int, crocodile: Double) =
-        if (recipes.reptile[recipe]) recipes.output[recipe] * crocodile else recipes.output[recipe].toDouble()
+        if (recipes.reptile(recipe)) recipes.output(recipe) * crocodile else recipes.output(recipe).toDouble()
 
     /** Relaxes costs until nothing gets cheaper: each shard is either hunted or made by its cheapest fusion. */
     private fun solve(crocodile: Double): Solution {
         val cost = DoubleArray(count) { if (rates[it] <= 0) Double.POSITIVE_INFINITY else 1 / rates[it] }
         val choice = IntArray(count) { DIRECT }
-
-        val dependents = Array(count) { LinkedHashSet<Int>() }
-        for (output in 0 until count) {
-            val recipes = data.recipes[output]
-            for (recipe in 0 until recipes.size) {
-                dependents[recipes.input1[recipe]] += output
-                dependents[recipes.input2[recipe]] += output
-            }
-        }
 
         val queue = ArrayDeque((0 until count).toList())
         val queued = BooleanArray(count) { true }
@@ -228,8 +332,8 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
             var best = current
             var bestRecipe = choice[output]
             for (recipe in 0 until recipes.size) {
-                val input1 = recipes.input1[recipe]
-                val input2 = recipes.input2[recipe]
+                val input1 = recipes.input1(recipe)
+                val input2 = recipes.input2(recipe)
                 val total = cost[input1] * data.fuseAmount[input1] + cost[input2] * data.fuseAmount[input2] + craftPenalty
                 val perShard = total / effectiveOutput(recipes, recipe, crocodile)
                 if (perShard < best - TOLERANCE) {
@@ -240,7 +344,7 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
             if (best < current - TOLERANCE || bestRecipe != choice[output]) {
                 cost[output] = best
                 choice[output] = bestRecipe
-                for (dependent in dependents[output]) {
+                for (dependent in data.dependents[output]) {
                     if (!queued[dependent]) {
                         queue.addLast(dependent)
                         queued[dependent] = true
@@ -260,7 +364,7 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
         val cycles = ArrayList<List<Int>>()
         var next = 0
 
-        fun inputsOf(node: Int) = data.recipes[node].let { intArrayOf(it.input1[choice[node]], it.input2[choice[node]]) }
+        fun inputsOf(node: Int) = data.recipes[node].let { intArrayOf(it.input1(choice[node]), it.input2(choice[node])) }
 
         fun connect(node: Int) {
             indices[node] = next
@@ -314,7 +418,7 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
             val external = LinkedHashSet<Int>()
             for (step in steps) {
                 val recipes = data.recipes[step.output]
-                for (input in intArrayOf(recipes.input1[step.recipe], recipes.input2[step.recipe])) {
+                for (input in intArrayOf(recipes.input1(step.recipe), recipes.input2(step.recipe))) {
                     if (input !in produced) external += input
                 }
             }
@@ -326,8 +430,8 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
         val recipes = data.recipes[shard]
         return Tree.Fused(
             shard, recipe,
-            build(recipes.input1[recipe], choice, cycles, depth + 1),
-            build(recipes.input2[recipe], choice, cycles, depth + 1),
+            build(recipes.input1(recipe), choice, cycles, depth + 1),
+            build(recipes.input2(recipe), choice, cycles, depth + 1),
         )
     }
 
@@ -340,8 +444,8 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
                 val recipes = data.recipes[tree.shard]
                 val crafts = craftsFor(required, effectiveOutput(recipes, tree.recipe, crocodile))
                 tree.crafts = crafts
-                assign(tree.input1, crafts * data.fuseAmount[recipes.input1[tree.recipe]], crocodile)
-                assign(tree.input2, crafts * data.fuseAmount[recipes.input2[tree.recipe]], crocodile)
+                assign(tree.input1, crafts * data.fuseAmount[recipes.input1(tree.recipe)], crocodile)
+                assign(tree.input2, crafts * data.fuseAmount[recipes.input2(tree.recipe)], crocodile)
             }
 
             is Tree.Cycle -> {
@@ -354,7 +458,7 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
                 val fromOutside = HashMap<Int, Int>()
                 for (step in tree.steps) {
                     val recipes = data.recipes[step.output]
-                    for (input in intArrayOf(recipes.input1[step.recipe], recipes.input2[step.recipe])) {
+                    for (input in intArrayOf(recipes.input1(step.recipe), recipes.input2(step.recipe))) {
                         if (input == tree.shard) consumed += data.fuseAmount[input]
                         if (input !in produced) fromOutside.merge(input, data.fuseAmount[input], Int::plus)
                     }

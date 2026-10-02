@@ -20,7 +20,7 @@ object ChatUtils {
         }
     }
 
-    fun stripColor(text: String): String = colorCode.replace(text, "")
+    fun stripColor(text: String): String = if ('§' in text) colorCode.replace(text, "") else text
 
     private fun prefix(): MutableComponent =
         colored("[", BRACKET_COLOR).append(colored("Ny", NAME_COLOR)).append(colored("]", BRACKET_COLOR))

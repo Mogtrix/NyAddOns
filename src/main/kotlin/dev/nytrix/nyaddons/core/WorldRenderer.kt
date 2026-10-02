@@ -38,7 +38,7 @@ class WorldRenderer(private val context: LevelRenderContext) {
     }
 
     /** Text that always faces the camera, visible through blocks and kept readable at a distance. */
-    fun text(x: Double, y: Double, z: Double, text: String) {
+    fun text(x: Double, y: Double, z: Double, text: Component) {
         var offset = Vec3(x - cameraPos.x, y - cameraPos.y, z - cameraPos.z)
         var distance = offset.length()
         if (distance > maxDistance) {
@@ -51,7 +51,7 @@ class WorldRenderer(private val context: LevelRenderContext) {
         pose.translate(offset.x, offset.y, offset.z)
         pose.scale(scale, scale, scale)
         context.submitNodeCollector().submitNameTag(
-            pose, Vec3.ZERO, 0, Component.literal(text), true, FULL_BRIGHT, distance * distance, camera,
+            pose, Vec3.ZERO, 0, text, true, FULL_BRIGHT, distance * distance, camera,
         )
         pose.popPose()
     }

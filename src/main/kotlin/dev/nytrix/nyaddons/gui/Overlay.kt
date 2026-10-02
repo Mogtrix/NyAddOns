@@ -17,15 +17,16 @@ interface OverlayContent {
 }
 
 /** Plain shadowed text lines, the way SkyHanni draws its displays. */
-class TextContent(private val lines: List<String>) : OverlayContent {
+class TextContent(lines: List<String>) : OverlayContent {
     private val font get() = Minecraft.getInstance().font
+    private val lines = lines.map { "§f$it" }
 
-    override val width get() = (lines.maxOfOrNull { font.width(it) } ?: 0) + 2
-    override val height get() = lines.size * LINE_HEIGHT + 1
+    override val width by lazy { (this.lines.maxOfOrNull { font.width(it) } ?: 0) + 2 }
+    override val height = lines.size * LINE_HEIGHT + 1
 
     override fun draw(graphics: GuiGraphicsExtractor) {
-        lines.forEachIndexed { index, line ->
-            graphics.text(font, "§f$line", 1, 1 + index * LINE_HEIGHT, WHITE, true)
+        for (index in lines.indices) {
+            graphics.text(font, lines[index], 1, 1 + index * LINE_HEIGHT, WHITE, true)
         }
     }
 
@@ -51,6 +52,24 @@ class Overlay(
     val content: () -> OverlayContent?,
     val onHud: Boolean = true,
 ) {
+    private var cached: OverlayContent? = null
+    private var cachedAt = Int.MIN_VALUE
+    private var cachedVersion = -1
+
+    /**
+     * What to draw this frame. The content is rebuilt a few times a second, not every frame:
+     * nothing an overlay shows changes faster than that.
+     */
+    fun current(): OverlayContent? {
+        val now = OverlayManager.ticks
+        if (cachedVersion != OverlayManager.version || now - cachedAt >= OverlayManager.REFRESH_TICKS) {
+            cached = content()
+            cachedAt = now
+            cachedVersion = OverlayManager.version
+        }
+        return cached
+    }
+
     /** A text overlay: [lines] returns the lines to draw, or an empty list to hide it. */
     constructor(label: String, position: () -> Position, example: List<String>, lines: () -> List<String>) : this(
         label, position, { TextContent(example) }, { lines().takeIf { it.isNotEmpty() }?.let(::TextContent) },
@@ -59,7 +78,27 @@ class Overlay(
 
 object OverlayManager {
 
+    /** How long drawn content is reused for. */
+    const val REFRESH_TICKS = 5
+
     val overlays = mutableListOf<Overlay>()
+
+    /** Client ticks since the game started. */
+    var ticks = 0
+        private set
+
+    /** Changes whenever something should be redrawn straight away. */
+    var version = 0
+        private set
+
+    fun tick() {
+        ticks++
+    }
+
+    /** Makes every overlay rebuild on the next frame, for changes the player expects to see at once. */
+    fun invalidate() {
+        version++
+    }
 
     fun register(overlay: Overlay) {
         overlays += overlay
@@ -76,7 +115,7 @@ object OverlayManager {
         val mc = Minecraft.getInstance()
         if (!SkyBlockData.onSkyBlock || mc.options.hideGui || mc.screen is PositionEditorScreen) return
         for (overlay in overlays) {
-            if (overlay.onHud) overlay.content()?.let { draw(graphics, overlay.position(), it) }
+            if (overlay.onHud) overlay.current()?.let { draw(graphics, overlay.position(), it) }
         }
     }
 

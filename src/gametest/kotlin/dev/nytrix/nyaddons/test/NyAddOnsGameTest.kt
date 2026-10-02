@@ -2,6 +2,10 @@ package dev.nytrix.nyaddons.test
 
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.NyEvents
+import dev.nytrix.nyaddons.core.TrackedTree
+import dev.nytrix.nyaddons.features.hunting.Shard
+import dev.nytrix.nyaddons.gui.OverlayManager
+import java.lang.management.ManagementFactory
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.gui.PositionEditorScreen
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
@@ -396,7 +400,130 @@ class NyAddOnsGameTest : FabricClientGameTest {
         context.waitTicks(25)
         context.onClient { check(ShardTracker.progress(grove).alertedMaxable) { "the enough-to-max alert did not fire" } }
         context.takeScreenshot("e-shard-enough-to-max")
+        benchmark(context, server, grove)
         server.runCommand("execute at @p run setblock ~ ~ ~2 minecraft:air")
+    }
+
+    /** Times the work the mod does every frame, tick, second and chat line, and logs it as `[NyBench]` lines. */
+    private fun benchmark(context: ClientGameTestContext, server: TestServerContext, grove: Shard) {
+        val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
+
+        fun measure(name: String, runs: Int, block: () -> Unit) {
+            repeat(runs / 10) { block() }
+            val thread = Thread.currentThread().threadId()
+            val bytesBefore = threads.getThreadAllocatedBytes(thread)
+            val start = System.nanoTime()
+            repeat(runs) { block() }
+            val nanos = System.nanoTime() - start
+            val bytes = threads.getThreadAllocatedBytes(thread) - bytesBefore
+            NyAddOns.logger.info("[NyBench] $name: ${nanos / runs} ns and ${bytes / runs} bytes per call")
+        }
+
+        fun placeChest(nbt: String) {
+            server.runCommand("execute at @p run setblock ~ ~ ~2 minecraft:air")
+            server.runCommand("execute at @p run setblock ~ ~ ~2 minecraft:chest$nbt")
+            context.waitTicks(10)
+            context.input.pressKey { it.keyUse }
+            context.waitForScreen(ContainerScreen::class.java)
+            context.waitTicks(10)
+        }
+
+        fun item(slot: Int, name: String, vararg lore: String) =
+            "{Slot:${slot}b,id:\"minecraft:player_head\",count:1,components:{\"minecraft:custom_name\":\"$name\"," +
+                "\"minecraft:lore\":[${lore.joinToString(",") { "\"$it\"" }}]}}"
+
+        // A tree to fuse, with one fusion ready, and a honeycomb tree and hive timer on the HUD.
+        context.onClient {
+            ShardTracker.progress(grove).apply { owned = 20; syphoned = 39 }
+            listOf("Flitter", "Salmon").forEach { ShardTracker.progress(ShardRepo.byName(it)!!).owned = 10 }
+            Storage.data.honeycombTrees += TrackedTree("Moonglade Marsh", "Fig Tree", 0.0, -60.0, 30.0, System.currentTimeMillis() + 600_000)
+            Storage.data.honeyhiveReadyAt = System.currentTimeMillis() + 600_000
+        }
+        context.waitTicks(30)
+        context.waitFor({ FusionTracker.upToDate }, 600)
+
+        context.onClient {
+            measure("HUD overlays, one frame", 10_000) { benchmarkHudFrame() }
+            measure("HUD overlays, rebuild (4 times a second)", 10_000) { OverlayManager.invalidate(); benchmarkHudFrame() }
+        }
+
+        val shards = (0 until 27).joinToString(",") { item(it, if (it % 2 == 0) "Flitter" else "Salmon", "Owned: 10 Shards") }
+        placeChest("{CustomName:\"Fusion Box\",Items:[$shards]}")
+        context.onClient { mc ->
+            val screen = mc.screen as ContainerScreen
+            measure("fusion menu, one frame", 2_000) { FusionTree.benchmarkMenuFrame(screen) }
+            measure("fusion menu, rebuild (4 times a second)", 2_000) { OverlayManager.invalidate(); FusionTree.benchmarkMenuFrame(screen) }
+        }
+        context.setScreen { null }
+
+        // An ordinary chest must not get the fusion tree attached at all.
+        val hooksBefore = context.computeOnClient<Int, RuntimeException> { FusionTree.menuHooks }
+        placeChest("{Items:[$shards]}")
+        context.onClient {
+            check(FusionTree.menuHooks == hooksBefore) { "the fusion tree attached itself to an ordinary chest" }
+            NyAddOns.logger.info("[NyBench] ordinary chest, one frame: nothing runs")
+        }
+        context.setScreen { null }
+
+        val box = (0 until 27).joinToString(",") {
+            item(it, if (it % 2 == 0) "Flitter" else "Salmon", "Ability I (Combat)", "Owned: 10 Shards", "Syphon 2 more to level up!", "Some Family", "COMMON SHARD (ID C1)")
+        }
+        placeChest("{CustomName:\"Hunting Box\",Items:[$box]}")
+        context.onClient {
+            // With nothing changing in the box, it must not be read again.
+            val readsBefore = ShardTracker.menuReads
+            measure("Hunting Box open, one tick", 8_000) { NyEvents.tick.forEach { it() } }
+            check(ShardTracker.menuReads == readsBefore) { "the Hunting Box was read again although nothing in it changed" }
+        }
+        context.setScreen { null }
+
+        val chat = listOf(
+            "[MVP+] Someone: anyone selling 5 Grove Shard cheap", "Guild > Friend: gg", "You earned 12 coins!",
+            "[NPC] Baker: Fresh bread today.", "Party > Leader: warp in 5", "+3 Foraging (Fig Log)",
+            "RARE DROP! Enchanted Fig Log", "You caught x2 Unknownthing Shards!", "[Lv120] Player: wts armor", "Sending to server mini22A...",
+        )
+        var line = 0
+        context.onClient { measure("one chat line", 20_000) { val text = chat[line++ % chat.size]; NyEvents.chat.forEach { it(text) } } }
+
+        server.runCommand("execute at @p run summon minecraft:armor_stand ~3 ~ ~3 {CustomName:\"Hologram Line\",CustomNameVisible:1b,NoGravity:1b,Tags:[\"bench\"]}")
+        repeat(299) { index ->
+            server.runCommand(
+                "execute at @p run summon minecraft:armor_stand ~${3 + index % 20} ~ ~${3 + index / 20} " +
+                    "{CustomName:\"Hologram Line $index\",CustomNameVisible:1b,NoGravity:1b,Tags:[\"bench\"]}",
+            )
+        }
+        context.waitTicks(20)
+        context.onClient { measure("once a second, 300 holograms nearby", 500) { NyEvents.second.forEach { it() } } }
+        server.runCommand("kill @e[tag=bench]")
+
+        context.onClient {
+            fun resource(name: String) = javaClass.getResourceAsStream("/fusion/$name")!!
+            val json = GZIPInputStream(resource("fusion-data.json.gz")).bufferedReader().readText()
+            val rates = resource("rates.json").bufferedReader().readText()
+            FusionData(json, rates)
+            val thread = Thread.currentThread().threadId()
+            val bytesBefore = threads.getThreadAllocatedBytes(thread)
+            val start = System.nanoTime()
+            var data: FusionData? = FusionData(json, rates)
+            val millis = (System.nanoTime() - start) / 1_000_000
+            val allocated = (threads.getThreadAllocatedBytes(thread) - bytesBefore) / 1_048_576
+            fun usedHeap(): Long {
+                repeat(3) { System.gc(); Thread.sleep(100) }
+                return Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
+            }
+            val withData = usedHeap()
+            check(data!!.ids.size == 322)
+            data = null
+            val kept = (withData - usedHeap()) / 1024
+            NyAddOns.logger.info("[NyBench] recipe data: $millis ms to load, $allocated MB allocated while loading, about $kept KB kept in memory")
+        }
+    }
+
+    /** What the HUD does for the overlays every frame, apart from the drawing itself. */
+    private fun benchmarkHudFrame() {
+        for (overlay in OverlayManager.overlays) {
+            if (overlay.onHud) overlay.current()
+        }
     }
 
     private fun ClientGameTestContext.onClient(block: (Minecraft) -> Unit) {

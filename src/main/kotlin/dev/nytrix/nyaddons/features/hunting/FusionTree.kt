@@ -15,6 +15,7 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.world.entity.player.Inventory
+import net.minecraft.world.inventory.Slot
 import net.minecraft.world.item.ItemStack
 import kotlin.math.ceil
 
@@ -68,11 +69,48 @@ object FusionTree : Feature {
     override fun init() {
         // Never on the HUD: drawInMenu puts it on the fusion screens. The position editor shows the example.
         OverlayManager.register(Overlay("Fusion Tree", ::position, { content(example(), null) }, { null }, onHud = false))
+        // Decided once per screen, so ordinary chests never run any of this.
         ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
-            if (screen is AbstractContainerScreen<*>) {
-                ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawInMenu(screen, graphics) }
-            }
+            if (screen !is AbstractContainerScreen<*>) return@register
+            val title = ChatUtils.stripColor(screen.title.string)
+            if (!ShardTracker.isFusionMenu(title)) return@register
+            menuHooks++
+            val picker = ShardTracker.isFusionPicker(title)
+            ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawInMenu(screen, picker, graphics) }
         }
+    }
+
+    /** How many screens the tree has been attached to. Ordinary chests must not add to this. */
+    var menuHooks = 0
+        private set
+
+    /** What is drawn in a fusion menu, rebuilt a few times a second instead of every frame. */
+    private class Frame(
+        val screen: AbstractContainerScreen<*>,
+        val builtAt: Int,
+        val version: Int,
+        val style: FusionTreeStyle,
+        val content: OverlayContent?,
+        val outlined: List<Slot>,
+    )
+
+    private var frame: Frame? = null
+
+    private fun frameFor(screen: AbstractContainerScreen<*>, picker: Boolean): Frame {
+        frame?.let {
+            val fresh = OverlayManager.ticks - it.builtAt < OverlayManager.REFRESH_TICKS
+            if (it.screen === screen && fresh && it.version == OverlayManager.version && it.style == config.style) return it
+        }
+        val trees = trees()
+        val next = nextStep(trees)
+        val wanted = if (picker && config.highlightSlots) next?.ingredients?.mapNotNull { it.shard }.orEmpty() else emptyList()
+        val outlined = if (wanted.isEmpty()) emptyList() else screen.menu.slots.filter {
+            it.container !is Inventory && !it.item.isEmpty && ShardTracker.shardOf(it.item) in wanted
+        }
+        return Frame(
+            screen, OverlayManager.ticks, OverlayManager.version, config.style,
+            if (trees.isEmpty()) null else content(trees, next), outlined,
+        ).also { frame = it }
     }
 
     /** Beside the menu until the player moves it. */
@@ -115,14 +153,15 @@ object FusionTree : Feature {
     /** The two shards to click for the next fusion, if one can be done. */
     fun nextIngredients(): List<Shard> = nextStep(trees())?.ingredients?.mapNotNull { it.shard }.orEmpty()
 
-    private fun drawInMenu(screen: AbstractContainerScreen<*>, graphics: GuiGraphicsExtractor) {
+    /** Everything one frame of a fusion menu costs, without the drawing itself. For the benchmark. */
+    fun benchmarkMenuFrame(screen: AbstractContainerScreen<*>) {
+        frameFor(screen, true)
+    }
+
+    private fun drawInMenu(screen: AbstractContainerScreen<*>, picker: Boolean, graphics: GuiGraphicsExtractor) {
         if (!config.enabled || !SkyBlockData.onSkyBlock) return
-        val title = ChatUtils.stripColor(screen.title.string)
-        if (!ShardTracker.isFusionMenu(title)) return
-        val trees = trees()
-        if (trees.isEmpty()) return
-        val next = nextStep(trees)
-        val content = content(trees, next)
+        val frame = frameFor(screen, picker)
+        val content = frame.content ?: return
         val position = position()
         // Pulled back on screen if it would run off the right or bottom edge, without moving where it is saved.
         val scale = OverlayManager.scaleOf(position)
@@ -132,14 +171,8 @@ object FusionTree : Feature {
             position.scale,
         )
         OverlayManager.draw(graphics, shown, content)
-
-        if (!config.highlightSlots || next == null || !ShardTracker.isFusionPicker(title)) return
-        val wanted = next.ingredients.mapNotNull { it.shard }
-        for (slot in screen.menu.slots) {
-            if (slot.container is Inventory || slot.item.isEmpty) continue
-            if (ShardTracker.shardOf(slot.item) in wanted) {
-                graphics.outline(screen.leftPos + slot.x - 1, screen.topPos + slot.y - 1, 18, 18, HIGHLIGHT)
-            }
+        for (slot in frame.outlined) {
+            graphics.outline(screen.leftPos + slot.x - 1, screen.topPos + slot.y - 1, 18, 18, HIGHLIGHT)
         }
     }
 

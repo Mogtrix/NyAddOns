@@ -5,7 +5,6 @@ import dev.nytrix.nyaddons.core.ChatUtils
 import dev.nytrix.nyaddons.core.NyEvents
 import dev.nytrix.nyaddons.core.SkyBlockData
 import dev.nytrix.nyaddons.core.Storage
-import dev.nytrix.nyaddons.core.WorldRenderer
 import dev.nytrix.nyaddons.features.Features
 import dev.nytrix.nyaddons.gui.ConfigTheme
 import dev.nytrix.nyaddons.gui.OverlayManager
@@ -78,6 +77,7 @@ object NyAddOns : ClientModInitializer {
                 it()
             }
             ticks++
+            OverlayManager.tick()
             val playing = SkyBlockData.onSkyBlock && mc.player != null
             if (playing) NyEvents.tick.forEach { it() }
             if (ticks % 20 == 0) {
@@ -95,15 +95,12 @@ object NyAddOns : ClientModInitializer {
         }
 
         LevelRenderEvents.COLLECT_SUBMITS.register { context ->
-            if (SkyBlockData.onSkyBlock) {
-                val renderer = WorldRenderer(context)
-                NyEvents.worldRender.forEach { it(renderer) }
-            }
+            if (SkyBlockData.onSkyBlock) NyEvents.worldRender.forEach { it(context) }
         }
 
         ClientLifecycleEvents.CLIENT_STOPPING.register {
             saveConfig()
-            Storage.saveIfDirty()
+            Storage.saveIfDirty(wait = true)
         }
     }
 
@@ -124,6 +121,7 @@ object NyAddOns : ClientModInitializer {
 
     private fun resetTimers() {
         Storage.resetTimers()
+        OverlayManager.invalidate()
         ChatUtils.chat("Cleared all timers.")
     }
 

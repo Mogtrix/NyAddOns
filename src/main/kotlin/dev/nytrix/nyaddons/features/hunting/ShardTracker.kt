@@ -99,8 +99,11 @@ object ShardTracker : Feature {
                 ::lines,
             ),
         )
+        // The track key only listens in the menus that list shards.
         ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
-            if (screen is AbstractContainerScreen<*>) {
+            if (screen !is AbstractContainerScreen<*>) return@register
+            val title = ChatUtils.stripColor(screen.title.string)
+            if (boxTitle.containsMatchIn(title) || menuTitle.containsMatchIn(title)) {
                 ScreenKeyboardEvents.allowKeyPress(screen).register { _, key -> !onMenuKey(screen, key.key()) }
             }
         }
@@ -124,6 +127,7 @@ object ShardTracker : Feature {
             ChatUtils.chat("Now tracking ${shard.coloredName}§e.")
         }
         Storage.markDirty()
+        OverlayManager.invalidate()
     }
 
     /** How many more shards have to be caught to max the attribute, or null if that is not known yet. */
@@ -156,6 +160,7 @@ object ShardTracker : Feature {
         if (query.equals("clear", ignoreCase = true)) {
             tracked.clear()
             Storage.markDirty()
+            OverlayManager.invalidate()
             ChatUtils.chat("Stopped tracking all shards.")
             return
         }
@@ -177,31 +182,69 @@ object ShardTracker : Feature {
 
     // Reading the menus
 
+    private enum class Menu { OTHER, HUNTING_BOX, ATTRIBUTE_MENU, CONFIRM_FUSION }
+
+    // The open screen, what kind of menu it is, and a fingerprint of what it held when last read.
+    private var openScreen: AbstractContainerScreen<*>? = null
+    private var openMenu = Menu.OTHER
+    private var boxPage = 1
+    private var boxPages = 1
+    private var lastContents = 0L
+
+    /** How many times a menu's items have actually been read. Unchanged menus are skipped. */
+    var menuReads = 0
+        private set
+
     private fun onTick() {
         if (!config.enabled || ++ticks % READ_INTERVAL_TICKS != 0) return
         val screen = Minecraft.getInstance().screen as? AbstractContainerScreen<*>
-        if (screen == null) {
-            endBoxVisit()
-            return
-        }
-        val title = ChatUtils.stripColor(screen.title.string)
-        val box = boxTitle.find(title)
-        when {
-            box != null -> readHuntingBox(screen, box.groupValues[1].toIntOrNull() ?: 1, box.groupValues[2].toIntOrNull() ?: 1)
+        if (screen !== openScreen) {
+            openScreen = screen
+            lastContents = 0
+            openMenu = Menu.OTHER
+            if (screen != null) {
+                val title = ChatUtils.stripColor(screen.title.string)
+                val box = boxTitle.find(title)
+                when {
+                    box != null -> {
+                        openMenu = Menu.HUNTING_BOX
+                        boxPage = box.groupValues[1].toIntOrNull() ?: 1
+                        boxPages = box.groupValues[2].toIntOrNull() ?: 1
+                    }
 
-            menuTitle.containsMatchIn(title) -> {
-                endBoxVisit()
-                readAttributeMenu(screen)
+                    menuTitle.containsMatchIn(title) -> openMenu = Menu.ATTRIBUTE_MENU
+                    title == CONFIRM_FUSION_TITLE -> openMenu = Menu.CONFIRM_FUSION
+                }
             }
+            if (openMenu != Menu.HUNTING_BOX) endBoxVisit()
+        }
+        if (screen == null || openMenu == Menu.OTHER) return
 
-            title == CONFIRM_FUSION_TITLE -> {
-                endBoxVisit()
+        // Reading every item's name and lore is the costly part, so it only happens when an item changed.
+        val contents = contentsOf(screen)
+        if (contents == lastContents) return
+        lastContents = contents
+        menuReads++
+        when (openMenu) {
+            Menu.HUNTING_BOX -> readHuntingBox(screen, boxPage, boxPages)
+            Menu.ATTRIBUTE_MENU -> readAttributeMenu(screen)
+            Menu.CONFIRM_FUSION -> {
                 val items = menuItems(screen).associate { it.index to it.value }
                 readConfirmFusion(items[FIRST_INGREDIENT_SLOT], items[SECOND_INGREDIENT_SLOT])
             }
 
-            else -> endBoxVisit()
+            Menu.OTHER -> {}
         }
+    }
+
+    /** Changes whenever the server replaces an item in the menu: each update arrives as a new stack. */
+    private fun contentsOf(screen: AbstractContainerScreen<*>): Long {
+        var hash = screen.menu.stateId.toLong() + 1
+        for (slot in screen.menu.slots) {
+            val item = slot.item
+            hash = hash * 31 + System.identityHashCode(item) + item.count
+        }
+        return hash
     }
 
     private fun endBoxVisit() {
@@ -309,8 +352,6 @@ object ShardTracker : Feature {
     /** The track key, pressed while hovering a shard in the Hunting Box or Attribute Menu. */
     private fun onMenuKey(screen: AbstractContainerScreen<*>, key: Int): Boolean {
         if (!config.enabled || !SkyBlockData.onSkyBlock || key != config.trackKey) return false
-        val title = ChatUtils.stripColor(screen.title.string)
-        if (!boxTitle.containsMatchIn(title) && !menuTitle.containsMatchIn(title)) return false
         val slot = screen.hoveredSlot ?: return false
         if (slot.container is Inventory) return false
         toggle(shardOf(slot.item) ?: return false)
@@ -321,6 +362,8 @@ object ShardTracker : Feature {
 
     private fun onChat(message: String) {
         if (!config.enabled || !ShardRepo.loaded) return
+        // Every line this cares about has one of these words; the rest of chat stops here.
+        if ("Shard" !in message && "Attribute" !in message && "fusion" !in message) return
 
         syphonedMessage.find(message)?.let { match ->
             val shard = ShardRepo.byAttribute(match.groupValues[2]) ?: return
