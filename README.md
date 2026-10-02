@@ -111,16 +111,6 @@ second and chat line. Overlays and the fusion tree are rebuilt four times a seco
 between, menus are only re-read when an item in them changes, and downloaded lists are refreshed
 at most once a day.
 
-## Adding a feature
-
-1. Add its options to a config class in `config/` (a new `@Category` in `NyConfig` for a new area).
-2. Write an `object` implementing `Feature` under `features/`. In `init()`, subscribe to
-   `NyEvents` (`second`, `chat`, `worldRender`) and register an `Overlay` if it shows HUD text.
-3. Add it to the list in `features/Feature.kt`.
-
-Shared helpers live in `core/` (chat, alerts, time formatting, island detection, saved data,
-beams and floating text) and `gui/` (overlays and the position editor).
-
 ## Licence
 
 MIT, see `LICENSE`. The config screen is [MoulConfig](https://github.com/NotEnoughUpdates/MoulConfig)
