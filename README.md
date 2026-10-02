@@ -41,6 +41,10 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
 **Fusion Tree** (Hunting)
 - Inside the Fusion Box, Shard Fusion and Confirm Fusion menus, shows how to fuse each tracked
   shard: every step with have/need, finished steps greyed out, and the step you can do now in green.
+- The Fusion Materials overlay lists each tracked shard's hunted materials under that shard, so a
+  shard needed by two of them shows under both, and only what the tree still needs counts: a
+  step in the middle you already hold enough of drops out along with everything below it.
+- In the fusion menus the tree is drawn behind the menu, not over it.
 - Three styles to choose from: an indented tree, a to-do list in fusing order, or a diagram with icons.
 - Puts a lime background behind the shards of the next fusion in the menu. In Shard Fusion, a
   shard that is already in the machine (the top rows) is not lit again, so only what is still
