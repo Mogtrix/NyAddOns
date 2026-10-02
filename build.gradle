@@ -1,0 +1,99 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'org.jetbrains.kotlin.jvm' version "${kotlin_version}"
+	id 'com.gradleup.shadow' version '9.6.0'
+}
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	maven {
+		name = 'NotEnoughUpdates'
+		url = 'https://maven.notenoughupdates.org/releases/'
+	}
+}
+
+configurations {
+	// Libraries that get bundled (and relocated) into the mod jar.
+	shadowImpl
+	implementation.extendsFrom shadowImpl
+}
+
+loom {
+	accessWidenerPath = file("src/main/resources/nyaddons.accesswidener")
+
+	mods {
+		"nyaddons" {
+			sourceSet sourceSets.main
+		}
+	}
+}
+
+fabricApi {
+	// In-game tests: `./gradlew runClientGameTest` launches the game, runs src/gametest and saves screenshots.
+	configureTests {
+		createSourceSet = true
+		modId = "nyaddons-gametest"
+		enableGameTests = false
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	implementation "net.fabricmc:fabric-language-kotlin:${project.fabric_kotlin_version}"
+
+	// The config screen library SkyHanni uses.
+	shadowImpl("org.notenoughupdates.moulconfig:modern-26.1:${project.moulconfig_version}") {
+		transitive = false
+	}
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+
+	from("LICENSE") {
+		rename { "LICENSE_NyAddOns" }
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+kotlin {
+	compilerOptions {
+		jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25
+	}
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	archiveClassifier = 'dev'
+}
+
+shadowJar {
+	configurations = [project.configurations.shadowImpl]
+	archiveClassifier = ''
+	relocate 'io.github.notenoughupdates.moulconfig', 'dev.nytrix.nyaddons.deps.moulconfig'
+	mergeServiceFiles()
+	// MoulConfig's own access widener is replaced by nyaddons.accesswidener; its licence text is kept.
+	exclude 'moulconfig.accesswidener'
+	rename { it == 'LICENSE' ? 'LICENSE_MoulConfig' : it }
+}
+
+assemble.dependsOn shadowJar

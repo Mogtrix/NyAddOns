@@ -1,0 +1,15 @@
+{
+	"schemaVersion": 1,
+	"id": "nyaddons-gametest",
+	"version": "1.0.0",
+	"name": "NyAddOns Game Tests",
+	"environment": "client",
+	"entrypoints": {
+		"fabric-client-gametest": [
+			{
+				"adapter": "kotlin",
+				"value": "dev.nytrix.nyaddons.test.NyAddOnsGameTest"
+			}
+		]
+	}
+}
