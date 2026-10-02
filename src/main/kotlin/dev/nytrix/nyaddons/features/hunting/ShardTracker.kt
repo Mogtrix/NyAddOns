@@ -100,6 +100,8 @@ object ShardTracker : Feature {
 
     fun isTracked(shard: Shard) = shard.id in tracked
 
+    fun trackedShards(): List<Shard> = tracked.mapNotNull { ShardRepo.byId(it) }
+
     fun toggle(shard: Shard) {
         if (tracked.remove(shard.id)) {
             ChatUtils.chat("Stopped tracking ${shard.coloredName}§e.")

@@ -26,6 +26,18 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
   the picker's icons from the [SkyblockAPI repository](https://github.com/SkyblockAPI/Repo);
   both are kept in `config/nyaddons` for offline use. The Hypixel API is not used.
 
+**Fusion Tracker** (Hunting)
+- For every tracked shard that still needs levelling, works out the quickest fusion tree and
+  lists the shards to hunt for it as `have/need`, in its own movable overlay.
+- The calculation is a port of [SkyShards](https://github.com/Campionnn/SkyShards)' calculator
+  (MIT, see `LICENSE_SkyShards` in the jar), ironman only: shards are costed by hunting time,
+  never by Bazaar price. Its recipe list and hunting rates are downloaded from the SkyShards
+  repository and kept in `config/nyaddons`.
+- Your attribute levels that affect fusing are read from the Hunting Box; Hunter Fortune,
+  Kuudra tier and the other options are set in the Hunting tab.
+- Shards already in your box are only counted for the materials you hunt, not for
+  in-between fusion results.
+
 ## Commands
 
 | Command | What it does |

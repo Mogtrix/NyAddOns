@@ -5,6 +5,12 @@ import dev.nytrix.nyaddons.core.NyEvents
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.gui.PositionEditorScreen
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
+import com.google.gson.JsonParser
+import dev.nytrix.nyaddons.features.hunting.FusionCalculator
+import dev.nytrix.nyaddons.features.hunting.FusionData
+import dev.nytrix.nyaddons.features.hunting.FusionParams
+import dev.nytrix.nyaddons.features.hunting.FusionRepo
+import dev.nytrix.nyaddons.features.hunting.FusionTracker
 import dev.nytrix.nyaddons.features.hunting.ShardPickerScreen
 import dev.nytrix.nyaddons.features.hunting.ShardRepo
 import dev.nytrix.nyaddons.features.hunting.ShardTracker
@@ -12,6 +18,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestServerContext
 import net.minecraft.client.gui.screens.inventory.ContainerScreen
 import net.minecraft.client.Minecraft
+import java.util.zip.GZIPInputStream
 import kotlin.math.abs
 
 /**
@@ -22,6 +29,7 @@ import kotlin.math.abs
 class NyAddOnsGameTest : FabricClientGameTest {
 
     override fun runTest(context: ClientGameTestContext) {
+        fusionCalculatorMatchesSkyShards()
         System.setProperty("nyaddons.devArea", "Moonglade Marsh")
         context.worldBuilder().create().use { world ->
             val server = world.server
@@ -184,6 +192,44 @@ class NyAddOnsGameTest : FabricClientGameTest {
         System.clearProperty("nyaddons.devArea")
     }
 
+    /**
+     * The port of SkyShards' calculator must give the same fusions and materials as the original
+     * for every shard. `fusion/reference.json` was produced by running SkyShards' own code on the
+     * data files next to it.
+     */
+    private fun fusionCalculatorMatchesSkyShards() {
+        fun resource(name: String) = javaClass.getResourceAsStream("/fusion/$name") ?: error("missing test resource $name")
+        val data = FusionData(
+            GZIPInputStream(resource("fusion-data.json.gz")).bufferedReader().readText(),
+            resource("rates.json").bufferedReader().readText(),
+        )
+        val reference = JsonParser.parseString(resource("reference.json").bufferedReader().readText()).asJsonObject
+        val totals = mapOf("common" to 96.0, "uncommon" to 64.0, "rare" to 48.0, "epic" to 32.0, "legendary" to 24.0)
+        val cases = mapOf(
+            "plain" to FusionParams(),
+            "maxed" to FusionParams(120.0, 10, 10, 10, 10, 10, 10, 10, 10, 10, craftPenalty = 0.8),
+            "loops" to FusionParams(crocodileLevel = 10),
+            "mixed" to FusionParams(55.0, 7, 3, 5, 2, 4, 6, 1, 3, 5, "t5", excludeChameleon = true, noWoodenBait = true, craftPenalty = 2.0),
+        )
+        var compared = 0
+        for ((name, params) in cases) {
+            val calculator = FusionCalculator(data, params)
+            val expectedByShard = reference.getAsJsonObject(name)
+            for ((index, id) in data.ids.withIndex()) {
+                val expected = expectedByShard.getAsJsonObject(id)
+                val plan = calculator.plan(id, totals.getValue(data.rarity[index])) ?: error("no plan for $id")
+                check(plan.crafts == expected["crafts"].asLong) { "$name $id: ${plan.crafts} fusions, SkyShards says ${expected["crafts"]}" }
+                val materials = expected.getAsJsonObject("materials")
+                check(plan.materials.keys == materials.keySet()) { "$name $id: materials ${plan.materials.keys}, SkyShards says ${materials.keySet()}" }
+                for ((material, amount) in plan.materials) {
+                    check(abs(amount - materials[material].asDouble) < 1e-6) { "$name $id: $amount of $material, SkyShards says ${materials[material]}" }
+                }
+                compared++
+            }
+        }
+        check(compared == cases.size * 322) { "compared $compared plans" }
+    }
+
     /** The Hunting Box is stood in for by a chest with the same title, item names and lore. */
     private fun shardTracker(context: ClientGameTestContext, server: TestServerContext) {
         context.waitFor({ ShardRepo.loaded }, 600)
@@ -249,6 +295,12 @@ class NyAddOnsGameTest : FabricClientGameTest {
         }
         context.waitTicks(25)
         context.takeScreenshot("b-shard-overlay")
+
+        // The fusion tree for what Grove still needs.
+        context.waitFor({ FusionRepo.data != null }, 1200)
+        context.waitTicks(30)
+        context.waitFor({ FusionTracker.upToDate }, 600)
+        context.takeScreenshot("g-fusion-materials")
 
         // The picker.
         context.onClient { it.connection!!.sendCommand("hunt") }

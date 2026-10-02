@@ -2,12 +2,8 @@ package dev.nytrix.nyaddons.features.hunting
 
 import com.google.gson.JsonParser
 import dev.nytrix.nyaddons.NyAddOns
+import dev.nytrix.nyaddons.core.Downloads
 import java.io.File
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 
 enum class ShardRarity(val color: String) {
     COMMON("§f"),
@@ -91,9 +87,9 @@ object ShardRepo {
         val iconsFile = File(directory, "shard_icons.json")
         readFiles(shardsFile, iconsFile)
         Thread({
-            val refreshed = download(SHARDS_URL, shardsFile)
+            val refreshed = Downloads.json(SHARDS_URL, shardsFile)
             // The icon file is large and rarely changes, so it is only fetched once.
-            val gotIcons = !iconsFile.exists() && download(ICONS_URL, iconsFile)
+            val gotIcons = !iconsFile.exists() && Downloads.json(ICONS_URL, iconsFile)
             if (refreshed || gotIcons) readFiles(shardsFile, iconsFile)
         }, "NyAddOns shard list").apply { isDaemon = true }.start()
     }
@@ -133,23 +129,4 @@ object ShardRepo {
             val texture = entry["texture"]?.takeIf { it.isJsonPrimitive }?.asString ?: return@mapNotNull null
             id to texture
         }.toMap()
-
-    private fun download(url: String, target: File): Boolean = try {
-        val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
-        val request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(30)).build()
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() == 200) {
-            // Make sure it is JSON before replacing a working copy.
-            JsonParser.parseString(response.body())
-            target.parentFile.mkdirs()
-            target.writeText(response.body())
-            true
-        } else {
-            NyAddOns.logger.warn("Could not download $url: HTTP ${response.statusCode()}")
-            false
-        }
-    } catch (e: Exception) {
-        NyAddOns.logger.warn("Could not download $url: $e")
-        false
-    }
 }
