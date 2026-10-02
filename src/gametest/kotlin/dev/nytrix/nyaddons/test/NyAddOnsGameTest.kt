@@ -496,6 +496,18 @@ class NyAddOnsGameTest : FabricClientGameTest {
         }
         context.takeScreenshot("j-shard-fusion-highlight")
 
+        // Hovering a lit shard: its tooltip must be drawn over the lime square, not under it.
+        val hoverScale = context.computeOnClient<Double, RuntimeException> { it.window.screenWidth.toDouble() / it.window.guiScaledWidth }
+        val (hoverX, hoverY) = context.computeOnClient<Pair<Int, Int>, RuntimeException> {
+            val slot = (it.screen as ContainerScreen).menu.slots[29]
+            (it.window.guiScaledWidth - 176) / 2 + slot.x + 8 to (it.window.guiScaledHeight - 222) / 2 + slot.y + 8
+        }
+        context.input.setCursorPos(hoverX * hoverScale, hoverY * hoverScale)
+        context.waitTicks(10)
+        context.takeScreenshot("j2-shard-fusion-highlight-tooltip")
+        context.input.setCursorPos(2.0, 2.0)
+        context.waitTicks(3)
+
         // F8 copies what is in the menu.
         context.input.pressKey(297)
         context.waitTicks(5)

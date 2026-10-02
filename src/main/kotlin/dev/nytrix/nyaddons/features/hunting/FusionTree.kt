@@ -80,9 +80,12 @@ object FusionTree : Feature {
             if (!ShardTracker.isFusionMenu(title)) return@register
             menuHooks++
             val kind = kindOf(title)
-            // The tree goes in the background, behind the panel, slots and items; the lime highlights stay on top of them.
-            ScreenEvents.afterBackground(screen).register { _, graphics, _, _, _ -> drawTree(screen, kind, graphics) }
-            ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawHighlights(screen, kind, graphics) }
+            // Both go in the background: the tree behind the panel, and the lime squares on the panel but under the
+            // slots' items, hover highlight and tooltips, which are drawn later.
+            ScreenEvents.afterBackground(screen).register { _, graphics, _, _, _ ->
+                drawTree(screen, kind, graphics)
+                drawHighlights(screen, kind, graphics)
+            }
         }
     }
 
@@ -236,14 +239,11 @@ object FusionTree : Feature {
     private fun drawHighlights(screen: AbstractContainerScreen<*>, kind: MenuKind, graphics: GuiGraphicsExtractor) {
         if (!config.enabled || !SkyBlockData.onSkyBlock) return
         val frame = frameFor(screen, kind)
-        // A lime background behind the item: fill the slot, then put the item back on top of it.
-        val font = Minecraft.getInstance().font
+        // Only the background is drawn here; the item itself is drawn over it later, by the menu.
         for (slot in frame.highlighted) {
             val x = screen.leftPos + slot.x
             val y = screen.topPos + slot.y
             graphics.fill(x, y, x + 16, y + 16, LIME)
-            graphics.item(slot.item, x, y)
-            graphics.itemDecorations(font, slot.item, x, y)
         }
     }
 
