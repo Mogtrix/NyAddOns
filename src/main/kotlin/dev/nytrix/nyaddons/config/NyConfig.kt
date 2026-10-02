@@ -39,6 +39,11 @@ class NyConfig : Config() {
     var garden = GardenConfig()
 
     @Expose
+    @Category(name = "Combat", desc = "Features for killing mobs.")
+    @JvmField
+    var combat = CombatConfig()
+
+    @Expose
     @Category(name = "Hunting", desc = "Features for shards and attributes.")
     @JvmField
     var hunting = HuntingConfig()
