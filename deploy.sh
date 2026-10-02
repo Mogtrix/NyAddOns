@@ -15,7 +15,8 @@ fi
 
 ./gradlew build --quiet
 
-JAR=$(ls build/libs/NyAddOns-*.jar | grep -v -e '-dev.jar' -e '-gametest.jar' | head -1)
+VERSION=$(sed -n 's/^version=//p' gradle.properties)
+JAR="build/libs/NyAddOns-$VERSION.jar"
 
 # Copy next to the target, then rename over it, so a running game keeps its old file intact.
 find "$MODS" -maxdepth 1 -name 'NyAddOns-*.jar' ! -name "$(basename "$JAR")" -delete

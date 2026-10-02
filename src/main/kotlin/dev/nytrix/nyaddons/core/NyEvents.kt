@@ -5,6 +5,9 @@ package dev.nytrix.nyaddons.core
  */
 object NyEvents {
 
+    /** Every client tick. */
+    val tick = mutableListOf<() -> Unit>()
+
     /** Once per second. */
     val second = mutableListOf<() -> Unit>()
 

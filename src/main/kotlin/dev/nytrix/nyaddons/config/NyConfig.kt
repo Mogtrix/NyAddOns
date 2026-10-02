@@ -32,4 +32,9 @@ class NyConfig : Config() {
     @Category(name = "Foraging", desc = "Features for Moonglade Marsh and Torrhus Canyon.")
     @JvmField
     var foraging = ForagingConfig()
+
+    @Expose
+    @Category(name = "Hunting", desc = "Features for shards and attributes.")
+    @JvmField
+    var hunting = HuntingConfig()
 }

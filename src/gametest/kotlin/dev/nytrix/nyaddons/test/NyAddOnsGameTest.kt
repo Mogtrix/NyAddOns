@@ -5,7 +5,12 @@ import dev.nytrix.nyaddons.core.NyEvents
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.gui.PositionEditorScreen
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
+import dev.nytrix.nyaddons.features.hunting.ShardPickerScreen
+import dev.nytrix.nyaddons.features.hunting.ShardRepo
+import dev.nytrix.nyaddons.features.hunting.ShardTracker
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
+import net.fabricmc.fabric.api.client.gametest.v1.context.TestServerContext
+import net.minecraft.client.gui.screens.inventory.ContainerScreen
 import net.minecraft.client.Minecraft
 import kotlin.math.abs
 
@@ -107,6 +112,8 @@ class NyAddOnsGameTest : FabricClientGameTest {
             context.takeScreenshot("5-dragged")
             context.setScreen { null }
 
+            shardTracker(context, server)
+
             // The config screen, in a taller window so each page of options fits in few screenshots.
             context.input.resizeWindow(854, 980)
             context.waitTicks(10)
@@ -164,8 +171,103 @@ class NyAddOnsGameTest : FabricClientGameTest {
             clickAt(optionsX, top + 98)
             pageThrough("9-honeyhive-options", 2)
             context.setScreen { null }
+
+            // The Hunting tab, third in the list.
+            context.onClient { NyAddOns.openConfig() }
+            context.waitFor { it.screen != null }
+            context.waitTicks(10)
+            clickAt(width / 2.0 - 115, top + 100)
+            clickAt(optionsX, top + 73)
+            pageThrough("f-hunting-options", 2)
+            context.setScreen { null }
         }
         System.clearProperty("nyaddons.devArea")
+    }
+
+    /** The Hunting Box is stood in for by a chest with the same title, item names and lore. */
+    private fun shardTracker(context: ClientGameTestContext, server: TestServerContext) {
+        context.waitFor({ ShardRepo.loaded }, 600)
+        val grove = ShardRepo.byName("Grove") ?: error("Grove is missing from the shard list")
+        val hideonring = ShardRepo.byName("Hideonring") ?: error("Hideonring is missing from the shard list")
+        check(ShardRepo.totalToMax(grove) == 96 && ShardRepo.totalToMax(hideonring) == 48) { "unexpected totals to max" }
+
+        fun item(slot: Int, name: String, vararg lore: String) =
+            "{Slot:${slot}b,id:\"minecraft:player_head\",count:1,components:{\"minecraft:custom_name\":\"$name\"," +
+                "\"minecraft:lore\":[${lore.joinToString(",") { "\"$it\"" }}]}}"
+
+        server.runCommand(
+            "execute at @p run setblock ~ ~ ~2 minecraft:chest{CustomName:\"Hunting Box\",Items:[" +
+                item(10, "Grove", "Nature Elemental VI (Foraging)", "Owned: 15 Shards", "Syphon 3 more to level up!") + "," +
+                item(11, "Hideonring", "Accessory Size X (Combat)", "Owned: 1,729 Shards", "Attribute Maxed!") +
+                "]}",
+        )
+        server.runCommand("execute as @p at @s run tp @s ~ ~ ~ 0 30")
+        context.waitTicks(10)
+        context.input.pressKey { it.keyUse }
+        context.waitForScreen(ContainerScreen::class.java)
+        context.waitTicks(10)
+
+        // Level 6 is 30 shards, plus 7 of the 10 towards level 7.
+        context.onClient {
+            val progress = ShardTracker.progress(grove)
+            check(progress.owned == 15 && progress.syphoned == 37) { "Grove read as ${progress.owned} owned, ${progress.syphoned} syphoned" }
+            check(ShardTracker.neededToMax(grove) == 44) { "Grove needs ${ShardTracker.neededToMax(grove)}, expected 44" }
+            check(ShardTracker.progress(hideonring).owned == 1729 && ShardTracker.isMaxed(hideonring)) { "Hideonring not read as maxed" }
+            val unowned = ShardRepo.all.first { it !== grove && it !== hideonring }
+            check(ShardTracker.progress(unowned).owned == 0) { "shards missing from the box were not set to zero" }
+        }
+
+        // The track key over a hovered shard.
+        val scale = context.computeOnClient<Double, RuntimeException> { it.window.screenWidth.toDouble() / it.window.guiScaledWidth }
+        val (slotX, slotY) = context.computeOnClient<Pair<Int, Int>, RuntimeException> {
+            val slot = (it.screen as ContainerScreen).menu.slots[10]
+            (it.window.guiScaledWidth - 176) / 2 + slot.x + 8 to (it.window.guiScaledHeight - 168) / 2 + slot.y + 8
+        }
+        context.input.setCursorPos(slotX * scale, slotY * scale)
+        context.waitTicks(2)
+        context.input.pressKey(72)
+        context.waitTicks(2)
+        context.onClient { check(ShardTracker.isTracked(grove)) { "the track key did not track the hovered shard" } }
+        context.takeScreenshot("a-hunting-box-key")
+        context.setScreen { null }
+
+        // The command, typed like a player would.
+        context.onClient { it.connection!!.sendCommand("hunt hideonring") }
+        context.waitTicks(2)
+        context.onClient { check(ShardTracker.isTracked(hideonring)) { "/hunt did not track the shard" } }
+
+        // Chat keeps the numbers current.
+        context.onClient {
+            NyEvents.chat.forEach { it("You caught x2 Grove Shards!") }
+            check(ShardTracker.progress(grove).owned == 17) { "catch message not counted" }
+            NyEvents.chat.forEach { it("+2 Nature Elemental Attribute (Level 6) - 1 more to upgrade!") }
+            val progress = ShardTracker.progress(grove)
+            check(progress.owned == 15 && progress.syphoned == 39) { "syphon message gave ${progress.owned} owned, ${progress.syphoned} syphoned" }
+            NyEvents.chat.forEach { it("LOOT SHARE You received 2 Grove Shards for assisting FallenYeti!") }
+            NyEvents.chat.forEach { it("GOOD CATCH! You caught Grove Shard x3!") }
+            check(ShardTracker.progress(grove).owned == 20) { "loot share and fishing messages not counted" }
+        }
+        context.waitTicks(25)
+        context.takeScreenshot("b-shard-overlay")
+
+        // The picker.
+        context.onClient { it.connection!!.sendCommand("hunt") }
+        context.waitForScreen(ShardPickerScreen::class.java)
+        context.waitTicks(40)
+        context.takeScreenshot("c-shard-picker")
+        context.input.typeChars("accessory")
+        context.waitTicks(5)
+        context.takeScreenshot("d-shard-picker-search")
+        context.setScreen { null }
+
+        // Owning enough to max sends the alert once.
+        context.onClient {
+            NyEvents.chat.forEach { it("You caught x40 Grove Shards!") }
+        }
+        context.waitTicks(25)
+        context.onClient { check(ShardTracker.progress(grove).alertedMaxable) { "the enough-to-max alert did not fire" } }
+        context.takeScreenshot("e-shard-enough-to-max")
+        server.runCommand("execute at @p run setblock ~ ~ ~2 minecraft:air")
     }
 
     private fun ClientGameTestContext.onClient(block: (Minecraft) -> Unit) {

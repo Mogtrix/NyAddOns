@@ -21,6 +21,12 @@ object SkyBlockData {
     var area: String? = null
         private set
 
+    /** The SkyBlock profile name from the tab list's `Profile:` line. Keeps its last value while the line is hidden. */
+    var profile = "default"
+        private set
+
+    private val profileLine = Regex("^Profile: (\\w+)")
+
     val onForagingIsland get() = area in foragingAreas
 
     fun allows(mode: AreaMode) = mode == AreaMode.ALL_ISLANDS || onForagingIsland
@@ -42,13 +48,20 @@ object SkyBlockData {
         }
         val title = level.scoreboard.getDisplayObjective(DisplaySlot.SIDEBAR)?.displayName?.string
         onSkyBlock = title != null && ChatUtils.stripColor(title).uppercase().let { "SKYBLOCK" in it || "SKIBLOCK" in it }
-        area = if (!onSkyBlock) null else connection.onlinePlayers.firstNotNullOfOrNull { info ->
-            val line = ChatUtils.stripColor(info.tabListDisplayName?.string ?: return@firstNotNullOfOrNull null).trim()
+        if (!onSkyBlock) {
+            area = null
+            return
+        }
+        val tabLines = connection.onlinePlayers.mapNotNull { info ->
+            info.tabListDisplayName?.string?.let { ChatUtils.stripColor(it).trim() }
+        }
+        area = tabLines.firstNotNullOfOrNull { line ->
             when {
                 line.startsWith("Area: ") -> line.removePrefix("Area: ").trim()
                 line.startsWith("Dungeon: ") -> line.removePrefix("Dungeon: ").trim()
                 else -> null
             }
         }
+        tabLines.firstNotNullOfOrNull { profileLine.find(it)?.groupValues?.get(1) }?.let { profile = it }
     }
 }

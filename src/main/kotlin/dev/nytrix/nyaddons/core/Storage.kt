@@ -18,11 +18,25 @@ class TrackedTree(
     var missedScans = 0
 }
 
+/** What is known about one shard. A null number means the game has not shown it to the mod yet. */
+class ShardProgress(
+    var owned: Int? = null,
+    var syphoned: Int? = null,
+    var alertedMaxable: Boolean = false,
+)
+
+/** Data that belongs to one SkyBlock profile. */
+class ProfileData {
+    var shards = mutableMapOf<String, ShardProgress>()
+    var trackedShards = mutableListOf<String>()
+}
+
 /** Everything the mod remembers between sessions. Add a field here when a feature needs to persist something. */
 class StorageData {
     var honeycombTrees = mutableListOf<TrackedTree>()
     var honeyhiveReadyAt = 0L
     var honeyhiveAlerted = true
+    var profiles = mutableMapOf<String, ProfileData>()
 }
 
 object Storage {
@@ -33,6 +47,9 @@ object Storage {
 
     var data = StorageData()
         private set
+
+    /** The data of the SkyBlock profile the player is on. */
+    val profile: ProfileData get() = data.profiles.getOrPut(SkyBlockData.profile) { ProfileData() }
 
     fun load(file: File) {
         this.file = file
@@ -46,6 +63,14 @@ object Storage {
 
     fun reset() {
         data = StorageData()
+        dirty = true
+    }
+
+    /** Clears the foraging timers and leaves everything else alone. */
+    fun resetTimers() {
+        data.honeycombTrees.clear()
+        data.honeyhiveReadyAt = 0
+        data.honeyhiveAlerted = true
         dirty = true
     }
 

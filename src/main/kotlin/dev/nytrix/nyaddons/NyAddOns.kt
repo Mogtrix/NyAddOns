@@ -36,6 +36,10 @@ object NyAddOns : ClientModInitializer {
         FabricLoader.getInstance().getModContainer(MOD_ID).map { it.metadata.version.friendlyString }.orElse("dev")
     }
 
+    /** Where the config, saved data and downloaded lists live. */
+    lateinit var directory: File
+        private set
+
     private lateinit var managedConfig: ManagedConfig<NyConfig>
     val config: NyConfig get() = managedConfig.instance
 
@@ -44,7 +48,7 @@ object NyAddOns : ClientModInitializer {
     private var ticks = 0
 
     override fun onInitializeClient() {
-        val directory = File(FabricLoader.getInstance().configDir.toFile(), MOD_ID)
+        directory = File(FabricLoader.getInstance().configDir.toFile(), MOD_ID)
         managedConfig = ManagedConfig.create(File(directory, "config.json"), NyConfig::class.java)
         Storage.load(File(directory, "data.json"))
 
@@ -74,9 +78,11 @@ object NyAddOns : ClientModInitializer {
                 it()
             }
             ticks++
+            val playing = SkyBlockData.onSkyBlock && mc.player != null
+            if (playing) NyEvents.tick.forEach { it() }
             if (ticks % 20 == 0) {
                 SkyBlockData.update()
-                if (SkyBlockData.onSkyBlock && mc.player != null) NyEvents.second.forEach { it() }
+                if (playing) NyEvents.second.forEach { it() }
             }
             if (ticks % SAVE_INTERVAL_TICKS == 0) Storage.saveIfDirty()
         }
@@ -104,19 +110,20 @@ object NyAddOns : ClientModInitializer {
     private fun registerCommands() {
         ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ ->
             for (name in listOf("ny", "nyaddons", "Ny", "NyAddOns")) {
-                dispatcher.register(
-                    ClientCommands.literal(name)
-                        .executes { openConfig(); 1 }
-                        .then(ClientCommands.literal("gui").executes { PositionEditorScreen.open(); 1 })
-                        .then(ClientCommands.literal("reset").executes { resetTimers(); 1 })
-                        .then(ClientCommands.literal("help").executes { showHelp(); 1 }),
-                )
+                val root = ClientCommands.literal(name)
+                    .executes { openConfig(); 1 }
+                    .then(ClientCommands.literal("gui").executes { PositionEditorScreen.open(); 1 })
+                    .then(ClientCommands.literal("reset").executes { resetTimers(); 1 })
+                    .then(ClientCommands.literal("help").executes { showHelp(); 1 })
+                Features.all.flatMap { it.subcommands() }.forEach { root.then(it) }
+                dispatcher.register(root)
             }
+            Features.all.flatMap { it.commands() }.forEach { dispatcher.register(it) }
         }
     }
 
     private fun resetTimers() {
-        Storage.reset()
+        Storage.resetTimers()
         ChatUtils.chat("Cleared all timers.")
     }
 
@@ -124,5 +131,8 @@ object NyAddOns : ClientModInitializer {
         ChatUtils.chat("§6/ny §7- §eopen the config")
         ChatUtils.chat("§6/ny gui §7- §emove and resize overlays")
         ChatUtils.chat("§6/ny reset §7- §eclear all timers")
+        ChatUtils.chat("§6/hunt §7- §echoose shards to track")
+        ChatUtils.chat("§6/hunt <shard> §7- §etrack or untrack a shard")
+        ChatUtils.chat("§6/hunt clear §7- §estop tracking all shards")
     }
 }

@@ -13,6 +13,19 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
 **Honeyhive Timer** (Foraging)
 - One-hour countdown from the first Honeyhive you loot, with a ready alert.
 
+**Shard Tracker** (Hunting)
+- Pick the shards you are hunting with `/hunt <shard>`, the picker (`/hunt`), or by pressing `H`
+  while hovering one in the Hunting Box or Attribute Menu.
+- A movable overlay shows how many of each are in your Hunting Box, the attribute's level, and
+  how many more you need to max it, with an alert once you have enough.
+- The numbers are read from the Hunting Box and Attribute Menu when you open them and kept
+  current from chat. Bazaar sales, taking shards out and fusion ingredients are not announced in
+  chat, so those are corrected the next time you open the Hunting Box.
+- The shard list is downloaded from the
+  [NotEnoughUpdates repository](https://github.com/NotEnoughUpdates/NotEnoughUpdates-REPO) and
+  the picker's icons from the [SkyblockAPI repository](https://github.com/SkyblockAPI/Repo);
+  both are kept in `config/nyaddons` for offline use. The Hypixel API is not used.
+
 ## Commands
 
 | Command | What it does |
@@ -20,6 +33,9 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
 | `/ny` or `/nyaddons` | Open the config |
 | `/ny gui` | Move and resize every overlay |
 | `/ny reset` | Clear all timers |
+| `/hunt` or `/ny hunt` | Open the shard picker |
+| `/hunt <shard>` | Track or untrack a shard |
+| `/hunt clear` | Stop tracking all shards |
 
 ## Installing
 
