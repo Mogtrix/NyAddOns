@@ -43,6 +43,7 @@ object MfKillTracker : MfKills {
     private var scanId = 0
     private var lastMob: MfMob? = null
     private var lastKillAt = 0L
+    private var lastRequest = 0L
 
     /** Overridable clock for tests. */
     var clock: () -> Long = System::currentTimeMillis
@@ -68,6 +69,15 @@ object MfKillTracker : MfKills {
             return
         }
         if (++ticks % SCAN_TICKS != 0L) return
+        // The mob list is freed after a while without use: load it back (at most every 30 s) before scanning.
+        if (!MagicFind.data.ready) {
+            val now = clock()
+            if (now - lastRequest > 30_000) {
+                lastRequest = now
+                MagicFind.data.request()
+            }
+            return
+        }
         scan()
     }
 
@@ -151,7 +161,7 @@ object MfKillTracker : MfKills {
     }
 
     private val ROMAN = Regex("\\s+[IVX]+$")
-    private val TAG = Regex("^(?:\\[Lv\\d+]\\s*)?(?:☠\\s*)?(.+?)\\s+([\\d.,]+[kKmMbBtT]?)(?:/[\\d.,]+[kKmMbBtT]?)?\\s*❤\\s*$")
+    private val TAG = Regex("^(?:(?:\\[[^\\]]*]|[^\\p{L}\\p{N}\\s\\[])\\s*)*(.+?)\\s+([\\d.,]+[kKmMbBtT]?)(?:/[\\d.,]+[kKmMbBtT]?)?\\s*❤\\s*$")
 
     class Parsed(val name: String, val health: Double)
 
@@ -169,6 +179,33 @@ object MfKillTracker : MfKills {
         }
         val digits = if (factor == 1.0) text else text.dropLast(1)
         return (digits.replace(",", "").toDoubleOrNull() ?: 1.0) * factor
+    }
+
+    /** For `/ny trackmob debug`: the health-bar name tags near the player and how each one was read. */
+    fun debugLines(): List<String> {
+        val mc = Minecraft.getInstance()
+        val level = mc.level ?: return listOf("No world.")
+        val player = mc.player ?: return listOf("No player.")
+        val out = ArrayList<String>()
+        out += "Mob data loaded: ${MagicFind.data.ready}. Enabled: ${config.enabledMobs.size}, tracked: ${config.trackedMobs.size}."
+        for (entity in level.entitiesForRendering()) {
+            if (out.size >= 9) { out += "(more tags not shown)"; break }
+            if (entity !is ArmorStand) continue
+            val name = entity.customName?.string ?: continue
+            if ('❤' !in name || entity.distanceToSqr(player) > 30.0 * 30.0) continue
+            val text = ChatUtils.stripColor(name)
+            val parsed = parseTag(name)
+            val mob = parsed?.let { resolve(it.name) }
+            val state = when {
+                parsed == null -> "§cnot read as a mob tag"
+                mob == null -> "§cread as \"${parsed.name}\", no Magic Find mob"
+                mob.id in config.trackedMobs || mob.id in config.enabledMobs -> "§aOK: ${mob.name}"
+                else -> "§eknown (${mob.name}) but not enabled or tracked"
+            }
+            out += "§f$text §7-> $state"
+        }
+        if (out.size == 1) out += "No health-bar name tags within 30 blocks."
+        return out
     }
 
     /** Test hook. */

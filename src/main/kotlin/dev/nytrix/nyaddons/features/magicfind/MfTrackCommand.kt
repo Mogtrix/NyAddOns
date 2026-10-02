@@ -50,6 +50,11 @@ object MfTrackCommand {
             else say("Tracking: §a" + tracked.sorted().joinToString("§7, §a") { MagicFind.data.mob(it)?.name ?: it })
             return
         }
+        if (query.equals("debug", ignoreCase = true)) {
+            MagicFind.data.request()
+            for (line in MfKillTracker.debugLines()) say(line)
+            return
+        }
         if (query.equals("clear", ignoreCase = true)) {
             tracked.clear()
             config.trackedDrops.clear()
@@ -70,6 +75,11 @@ object MfTrackCommand {
             config.trackedDrops.remove(mob.id)
             say("Stopped tracking ${mob.name}.")
         } else if (pick == null && options.size > 1 && !mob.slayer) {
+            // Tracking starts at once (every drop); the choices only narrow it, so it works even if the chat click does not.
+            tracked += mob.id
+            config.trackedDrops.remove(mob.id)
+            NyAddOns.saveConfig()
+            say("Tracking ${mob.name}: all drops. Warning: this can spam chat.")
             ask(mob, options)
             return
         } else if (pick != null) {
@@ -92,8 +102,7 @@ object MfTrackCommand {
 
     /** Asks which drop to follow: one clickable line per drop plus "all drops". */
     private fun ask(mob: MfMob, options: List<MfDrop>) {
-        say("Which drop are you going for on ${mob.name}? Click one:")
-        sayComponent(option(mob, "all", "§a[All drops]"))
+        say("Only want one drop? Click it (or type /ny trackmob ${mob.name} #<number>):")
         for ((i, drop) in options.withIndex()) {
             val odds = if (drop.special) "special" else MfMath.oneIn(drop.chance)
             sayComponent(option(mob, (i + 1).toString(), "§e${i + 1}. ${drop.item} §7$odds"))

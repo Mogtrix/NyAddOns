@@ -115,12 +115,20 @@ class MagicFindKillsTest : FabricClientGameTest {
                 check(lines() == listOf("Magic Find unknown (open the SkyBlock menu or show the Stats tab widget)")) { "unknown: ${lines()}" }
                 stats.mf = 250.0
 
+                // Name tag shapes seen on Hypixel (levels with a space, a leading symbol, health with suffixes).
+                for ((tag, name) in listOf(
+                    "[Lv100] Minotaur 1.5M/1.5M❤" to "Minotaur", "[Lv 60] Minos Champion 12.5k/12.5k❤" to "Minos Champion",
+                    "§8[§7Lv10§8] §cGaia Construct §a2,500§f/§a2,500§c❤" to "Gaia Construct", "✯ [Lv100] Minotaur 5,000❤" to "Minotaur",
+                    "☠ Revenant Horror IV 1.5M❤" to "Revenant Horror IV",
+                )) check(MfKillTracker.parseTag(tag)?.name == name) { "tag \"$tag\" read as ${MfKillTracker.parseTag(tag)?.name}" }
+                check(MfKillTracker.parseTag("Minotaur 50% charged") == null) { "non-mob tag read as a mob" }
+
                 // /trackmob.
                 out.clear()
                 context.runOnClient<RuntimeException> {
                     MfTrackCommand.run("")
                     MfTrackCommand.run("minotaur")
-                    check(cfg().trackedMobs.isEmpty()) { "asking must not track yet" }
+                    check(cfg().trackedMobs.contains("minotaur") && cfg().trackedDrops.isEmpty()) { "tracking starts at once with all drops" }
                     MfTrackCommand.run("minotaur #9")
                     MfTrackCommand.run("minotaur #1")
                     check(cfg().trackedDrops["minotaur"] == "Stick") { "picked drop: ${cfg().trackedDrops}" }
@@ -136,8 +144,8 @@ class MagicFindKillsTest : FabricClientGameTest {
                 }
                 check(lines() == listOf(
                     "Not tracking any mob. Use /ny trackmob <mob>.",
-                    "Which drop are you going for on Minotaur? Click one:",
-                    "[All drops]",
+                    "Tracking Minotaur: all drops. Warning: this can spam chat.",
+                    "Only want one drop? Click it (or type /ny trackmob Minotaur #<number>):",
                     "1. Stick ${MfMath.oneIn(minotaur.drops[0].chance)}",
                     "2. Bone ${MfMath.oneIn(minotaur.drops[1].chance)}",
                     "Pick a number from 1 to 2, or #all.",
@@ -150,6 +158,10 @@ class MagicFindKillsTest : FabricClientGameTest {
                     "Stopped tracking all mobs.",
                     "Not tracking any mob. Use /ny trackmob <mob>.",
                 )) { "trackmob: ${lines()}" }
+
+                out.clear()
+                context.runOnClient<RuntimeException> { MfTrackCommand.run("debug") }
+                check(lines().firstOrNull()?.startsWith("Mob data loaded: true.") == true) { "debug: ${lines()}" }
 
                 // Odds: tracked mob that is not enabled in the menu still reports. Looting 3, MF 312.
                 out.clear()

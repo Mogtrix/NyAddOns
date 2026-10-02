@@ -69,6 +69,7 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric).
 - `/ny trackmob <mob>` asks which drop you are going for (click one in chat, or `/ny trackmob <mob> #2`, `#all`). Kills of that
   mob then print that drop's base odds, then the odds with your Magic Find (and Looting, where it applies).
   Tracking many mobs can spam chat.
+- `/ny trackmob debug` lists the health-bar name tags near you and how each was read (use it if kills are not counted).
 - Kills are detected from name tags and your hits, so ranged or indirect kills can be missed.
 
 ## Commands
