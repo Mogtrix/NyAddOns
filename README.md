@@ -35,6 +35,9 @@ Put the jar in your `mods` folder, or in the Modrinth App use *Add content → A
 
 The mod jar is `build/libs/NyAddOns-<version>.jar`. Needs JDK 25 or newer.
 
+`./deploy.sh` builds the mod and installs it into the Modrinth App profile "SkyBlock Enhanced"
+(pass another profile name as an argument). Restart the instance to load the new build.
+
 `./gradlew runClientGameTest` launches the game, runs the in-game tests in `src/gametest`
 against a fake name tag and fake chat lines, and saves screenshots to
 `build/run/clientGameTest/screenshots`. `./gradlew prodClientGameTest` does the same against
