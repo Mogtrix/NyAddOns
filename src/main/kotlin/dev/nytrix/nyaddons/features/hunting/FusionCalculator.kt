@@ -206,10 +206,19 @@ data class FusionParams(
  * @param shard the shard's code, like `R34`
  * @param quantity how many of it this step calls for
  * @param crafts how many fusions make that quantity; zero for a shard that is hunted
+ * @param output how many one fusion makes
  * @param fuseAmount how many of it one fusion uses up when it is an ingredient
  * @param inputs the ingredients; empty for a shard that is hunted
  */
-class FusionNode(val shard: String, val quantity: Double, val crafts: Long, val fuseAmount: Int, val inputs: List<FusionNode>)
+class FusionNode(
+    val shard: String,
+    val quantity: Double,
+    val crafts: Long,
+    val fuseAmount: Int,
+    /** How many one fusion makes; zero for a shard that is hunted or made in a loop. */
+    val output: Double,
+    val inputs: List<FusionNode>,
+)
 
 /**
  * What it takes to make some quantity of one shard.
@@ -265,7 +274,8 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
             is Tree.Fused -> tree.crafts to listOf(tree.input1, tree.input2)
             is Tree.Cycle -> tree.crafts to tree.cycleInputs + tree.inputRecipe
         }
-        return FusionNode(data.ids[tree.shard], tree.quantity, crafts.roundToLong(), data.fuseAmount[tree.shard], inputs.map(::nodeOf))
+        val output = (tree as? Tree.Fused)?.let { effectiveOutput(data.recipes[it.shard], it.recipe, crocodileMultiplier) } ?: 0.0
+        return FusionNode(data.ids[tree.shard], tree.quantity, crafts.roundToLong(), data.fuseAmount[tree.shard], output, inputs.map(::nodeOf))
     }
 
     // Hunting rates

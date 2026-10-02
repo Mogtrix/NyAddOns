@@ -55,7 +55,7 @@ class FusionTreeConfig {
     var style = FusionTreeStyle.TREE
 
     @Expose
-    @ConfigOption(name = "Highlight Slots", desc = "Outline the two shards of the next fusion you can do in the fusion menus.")
+    @ConfigOption(name = "Highlight Slots", desc = "Put a lime background behind the shards of the next fusion you can do, in the fusion menus.")
     @ConfigEditorBoolean
     @JvmField
     var highlightSlots = true
@@ -147,6 +147,12 @@ class ShardTrackerConfig {
     @ConfigEditorKeybind(defaultKey = KEY_H)
     @JvmField
     var trackKey = KEY_H
+
+    @Expose
+    @ConfigOption(name = "Track Key Hint", desc = "Show which key tracks a shard above the Hunting Box and Attribute Menu.")
+    @ConfigEditorBoolean
+    @JvmField
+    var showHint = true
 
     @Expose
     @ConfigOption(name = "/hunt Command", desc = "Register §e/hunt§7 as well as §e/ny hunt§7. Turn off if it ever clashes with a Hypixel command. Applies after restarting the game.")

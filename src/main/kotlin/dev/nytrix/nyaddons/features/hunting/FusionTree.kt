@@ -17,12 +17,13 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.inventory.Slot
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.Items
 import kotlin.math.ceil
 
 /**
  * Inside the fusion menus, shows how to fuse each tracked shard: every step, how many of each
  * shard it calls for against how many are in the Hunting Box, and which step can be done now.
- * The two shards of that step are outlined in the menu.
+ * The shards of that step are given a lime background in the menu.
  */
 object FusionTree : Feature {
 
@@ -40,12 +41,16 @@ object FusionTree : Feature {
         val need: Int,
         val crafts: Long,
         val fuseAmount: Int,
+        val output: Double,
         val root: Boolean,
         ingredients: List<Entry>,
     ) {
         val done = !root && have != null && have >= need
         val ingredients = if (done) emptyList() else ingredients
         val fused get() = crafts > 0
+
+        /** Fusions still to do for this step; counts down as the shard is made. */
+        val left get() = FusionTracker.fusionsLeft(need, crafts, output, have, root)
 
         /** True when at least one fusion of this step can be done with what is in the box. */
         val doable get() = ingredients.isNotEmpty() && ingredients.all { (it.have ?: 0) >= it.fuseAmount }
@@ -62,7 +67,11 @@ object FusionTree : Feature {
 
     private const val MENU_WIDTH = 176
     private const val MENU_HEIGHT = 222
-    private const val HIGHLIGHT = 0xFF55FF55.toInt()
+    private const val LIME = 0xFF55FF55.toInt()
+
+    // In Shard Fusion the first three rows hold the machine; the list of shards starts below them.
+    private const val MACHINE_SLOTS = 27
+    private const val MACHINE_CAPACITY = 2
 
     private val config get() = NyAddOns.config.hunting.fusionTree
 
@@ -75,14 +84,22 @@ object FusionTree : Feature {
             val title = ChatUtils.stripColor(screen.title.string)
             if (!ShardTracker.isFusionMenu(title)) return@register
             menuHooks++
-            val picker = ShardTracker.isFusionPicker(title)
-            ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawInMenu(screen, picker, graphics) }
+            val kind = kindOf(title)
+            ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawInMenu(screen, kind, graphics) }
         }
     }
 
     /** How many screens the tree has been attached to. Ordinary chests must not add to this. */
     var menuHooks = 0
         private set
+
+    private enum class MenuKind { FUSION_BOX, SHARD_FUSION, CONFIRM }
+
+    private fun kindOf(title: String) = when {
+        title == "Confirm Fusion" -> MenuKind.CONFIRM
+        title == "Shard Fusion" -> MenuKind.SHARD_FUSION
+        else -> MenuKind.FUSION_BOX
+    }
 
     /** What is drawn in a fusion menu, rebuilt a few times a second instead of every frame. */
     private class Frame(
@@ -91,27 +108,58 @@ object FusionTree : Feature {
         val version: Int,
         val style: FusionTreeStyle,
         val content: OverlayContent?,
-        val outlined: List<Slot>,
+        val highlighted: List<Slot>,
     )
 
     private var frame: Frame? = null
 
-    private fun frameFor(screen: AbstractContainerScreen<*>, picker: Boolean): Frame {
+    private fun frameFor(screen: AbstractContainerScreen<*>, kind: MenuKind): Frame {
         frame?.let {
             val fresh = OverlayManager.ticks - it.builtAt < OverlayManager.REFRESH_TICKS
             if (it.screen === screen && fresh && it.version == OverlayManager.version && it.style == config.style) return it
         }
         val trees = trees()
         val next = nextStep(trees)
-        val wanted = if (picker && config.highlightSlots) next?.ingredients?.mapNotNull { it.shard }.orEmpty() else emptyList()
-        val outlined = if (wanted.isEmpty()) emptyList() else screen.menu.slots.filter {
-            it.container !is Inventory && !it.item.isEmpty && ShardTracker.shardOf(it.item) in wanted
+        val highlighted = when {
+            !config.highlightSlots || next == null -> emptyList()
+            kind == MenuKind.CONFIRM -> confirmButton(screen, next)
+            else -> shardsToClick(screen, kind, next)
         }
         return Frame(
             screen, OverlayManager.ticks, OverlayManager.version, config.style,
-            if (trees.isEmpty()) null else content(trees, next), outlined,
+            if (trees.isEmpty()) null else content(trees, next), highlighted,
         ).also { frame = it }
     }
+
+    /**
+     * The shards of the next fusion that still have to be put in the machine. In Shard Fusion the
+     * top rows are the machine, so a shard already sitting there is not highlighted in the list;
+     * a fusion of two of the same shard keeps one highlighted until both are in.
+     */
+    private fun shardsToClick(screen: AbstractContainerScreen<*>, kind: MenuKind, next: Entry): List<Slot> {
+        val shardSlots = screen.menu.slots.filter { it.container !is Inventory && !it.item.isEmpty }
+            .mapNotNull { slot -> ShardTracker.shardOf(slot.item)?.let { slot to it } }
+        var inMachine = emptyList<Pair<Slot, Shard>>()
+        if (kind == MenuKind.SHARD_FUSION) {
+            val top = shardSlots.filter { it.first.index < MACHINE_SLOTS }
+            // The machine holds two shards at most; more than that means this is not the layout expected.
+            if (top.size <= MACHINE_CAPACITY) inMachine = top
+        }
+        val missing = stillNeeded(next.ingredients.mapNotNull { it.shard?.id }, inMachine.map { it.second.id })
+        val machineSlots = inMachine.map { it.first }.toSet()
+        return shardSlots.filter { (slot, shard) -> slot !in machineSlots && shard.id in missing }.map { it.first }
+    }
+
+    /** The confirm button, when the fusion on the Confirm Fusion screen is the next one in the tree. */
+    private fun confirmButton(screen: AbstractContainerScreen<*>, next: Entry): List<Slot> {
+        val shown = ShardTracker.confirmIngredients().map { it.id }.sorted()
+        if (shown.isEmpty() || shown != next.ingredients.mapNotNull { it.shard?.id }.sorted()) return emptyList()
+        return screen.menu.slots.filter { it.container !is Inventory && it.item.item == Items.LIME_TERRACOTTA }
+    }
+
+    /** The slots highlighted in a fusion menu right now. For the test. */
+    fun highlightedSlots(screen: AbstractContainerScreen<*>): List<Int> =
+        frameFor(screen, kindOf(ChatUtils.stripColor(screen.title.string))).highlighted.map { it.index }
 
     /** Beside the menu until the player moves it. */
     private fun position(): Position {
@@ -132,7 +180,7 @@ object FusionTree : Feature {
         return Entry(
             shard?.name ?: node.shard, shard?.rarity?.color ?: "§f", shard,
             if (root) null else shard?.let { ShardTracker.progress(it).owned },
-            ceil(node.quantity).toInt(), node.crafts, node.fuseAmount, root,
+            ceil(node.quantity).toInt(), node.crafts, node.fuseAmount, node.output, root,
             node.inputs.map { entryOf(it, false) },
         )
     }
@@ -155,12 +203,12 @@ object FusionTree : Feature {
 
     /** Everything one frame of a fusion menu costs, without the drawing itself. For the benchmark. */
     fun benchmarkMenuFrame(screen: AbstractContainerScreen<*>) {
-        frameFor(screen, true)
+        frameFor(screen, kindOf(ChatUtils.stripColor(screen.title.string)))
     }
 
-    private fun drawInMenu(screen: AbstractContainerScreen<*>, picker: Boolean, graphics: GuiGraphicsExtractor) {
+    private fun drawInMenu(screen: AbstractContainerScreen<*>, kind: MenuKind, graphics: GuiGraphicsExtractor) {
         if (!config.enabled || !SkyBlockData.onSkyBlock) return
-        val frame = frameFor(screen, picker)
+        val frame = frameFor(screen, kind)
         val content = frame.content ?: return
         val position = position()
         // Pulled back on screen if it would run off the right or bottom edge, without moving where it is saved.
@@ -171,8 +219,15 @@ object FusionTree : Feature {
             position.scale,
         )
         OverlayManager.draw(graphics, shown, content)
-        for (slot in frame.outlined) {
-            graphics.outline(screen.leftPos + slot.x - 1, screen.topPos + slot.y - 1, 18, 18, HIGHLIGHT)
+
+        // A lime background behind the item: fill the slot, then put the item back on top of it.
+        val font = Minecraft.getInstance().font
+        for (slot in frame.highlighted) {
+            val x = screen.leftPos + slot.x
+            val y = screen.topPos + slot.y
+            graphics.fill(x, y, x + 16, y + 16, LIME)
+            graphics.item(slot.item, x, y)
+            graphics.itemDecorations(font, slot.item, x, y)
         }
     }
 
@@ -185,7 +240,16 @@ object FusionTree : Feature {
     private const val HEADER = "§6§lFusion Tree"
     private const val NEXT_MARKER = "§a▶ "
 
-    private fun fusions(count: Long) = if (count == 1L) "1 fusion" else "$count fusions"
+    private fun fusions(count: Long) = if (count == 1L) "1 fusion left" else "$count fusions left"
+
+    /**
+     * Which of the [wanted] shards still have to be put in the machine, given what is already [inMachine].
+     * Wanting a shard twice needs it twice in the machine.
+     */
+    fun stillNeeded(wanted: List<String>, inMachine: List<String>): Set<String> {
+        val present = inMachine.groupingBy { it }.eachCount()
+        return wanted.groupingBy { it }.eachCount().filter { (id, count) -> (present[id] ?: 0) < count }.keys
+    }
 
     // Indented tree
 
@@ -193,9 +257,9 @@ object FusionTree : Feature {
         val marker = if (entry === next) NEXT_MARKER else ""
         val name = if (entry.doable) "§a${entry.name}" else entry.coloredName
         val line = when {
-            entry.root -> "$marker$name §7x${entry.need} §8(${fusions(entry.crafts)})"
+            entry.root -> "$marker$name §7x${entry.need} §8(${fusions(entry.left)})"
             entry.done -> "§8✔ ${entry.name}: ${entry.have}/${entry.need}"
-            entry.fused -> "$marker$name§7: ${entry.haveText}§7/§f${entry.need} §8(${fusions(entry.crafts)})"
+            entry.fused -> "$marker$name§7: ${entry.haveText}§7/§f${entry.need} §8(${fusions(entry.left)})"
             else -> "${entry.coloredName}§7: ${entry.haveText}§7/§f${entry.need}"
         }
         return listOf("  ".repeat(depth) + line) + entry.ingredients.flatMap { treeLines(it, depth + 1, next) }
@@ -216,7 +280,7 @@ object FusionTree : Feature {
             val marker = if (step === next) NEXT_MARKER else ""
             val numberColor = if (step.doable) "§a" else "§7"
             val ingredients = step.ingredients.joinToString(" §7+ ") { "${it.coloredName} ${it.haveText}§7/§f${it.need}" }
-            "$marker$numberColor$number. $ingredients §7→ ${step.coloredName} §8(${step.crafts}x)"
+            "$marker$numberColor$number. $ingredients §7→ ${step.coloredName} §8(${step.left} left)"
         }
     }
 
@@ -275,9 +339,9 @@ object FusionTree : Feature {
 
                 val name = font.plainSubstrByWidth(entry.name, BOX_WIDTH - TEXT_X - 3, false)
                 val detail = when {
-                    entry.root -> "§7x${entry.need} §8(${entry.crafts}x)"
+                    entry.root -> "§7x${entry.need} §8(${entry.left} left)"
                     entry.done -> "§8✔ ${entry.have}/${entry.need}"
-                    entry.fused -> "${entry.haveText}§7/§f${entry.need} §8(${entry.crafts}x)"
+                    entry.fused -> "${entry.haveText}§7/§f${entry.need} §8(${entry.left} left)"
                     else -> "${entry.haveText}§7/§f${entry.need}"
                 }
                 graphics.text(font, (if (entry.done) "§8" else entry.color) + name, box.x + TEXT_X, box.y + 3, WHITE, true)
@@ -306,8 +370,8 @@ object FusionTree : Feature {
 
     /** A made-up tree for the position editor, which is opened outside the fusion menus. */
     private fun example(): List<Entry> {
-        fun hunted(name: String, color: String, have: Int, need: Int) = Entry(name, color, null, have, need, 0, 5, false, emptyList())
-        val sunFish = Entry("Sun Fish", "§5", null, 3, 20, 4, 5, false, listOf(hunted("Azure", "§f", 25, 20), hunted("Verdant", "§f", 8, 20)))
-        return listOf(Entry("Hideonring", "§9", null, null, 16, 8, 5, true, listOf(hunted("Bitbug", "§9", 34, 40), sunFish)))
+        fun hunted(name: String, color: String, have: Int, need: Int) = Entry(name, color, null, have, need, 0, 5, 0.0, false, emptyList())
+        val sunFish = Entry("Sun Fish", "§5", null, 3, 20, 4, 5, 5.0, false, listOf(hunted("Azure", "§f", 25, 20), hunted("Verdant", "§f", 8, 20)))
+        return listOf(Entry("Hideonring", "§9", null, null, 16, 8, 5, 2.0, true, listOf(hunted("Bitbug", "§9", 34, 40), sunFish)))
     }
 }

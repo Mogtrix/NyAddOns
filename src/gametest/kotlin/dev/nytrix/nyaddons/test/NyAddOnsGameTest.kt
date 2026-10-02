@@ -23,6 +23,8 @@ import dev.nytrix.nyaddons.features.hunting.ShardTracker
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestServerContext
 import net.minecraft.client.gui.screens.inventory.ContainerScreen
+import net.minecraft.world.SimpleContainer
+import net.minecraft.world.inventory.ChestMenu
 import net.minecraft.core.component.DataComponents
 import net.minecraft.network.chat.Component
 import net.minecraft.world.item.ItemStack
@@ -241,6 +243,22 @@ class NyAddOnsGameTest : FabricClientGameTest {
         check(compared == cases.size * 322) { "compared $compared plans" }
     }
 
+    private fun headStack(name: String, vararg lore: String) = ItemStack(Items.PLAYER_HEAD).apply {
+        set(DataComponents.CUSTOM_NAME, Component.literal(name))
+        set(DataComponents.LORE, ItemLore(lore.map { Component.literal(it) }))
+    }
+
+    /** Opens a six-row menu with the given title and items, like the ones Hypixel sends. */
+    private fun openMenu(context: ClientGameTestContext, title: String, items: Map<Int, ItemStack>) {
+        context.setScreen {
+            val inventory = Minecraft.getInstance().player!!.inventory
+            val container = SimpleContainer(54)
+            items.forEach { (slot, stack) -> container.setItem(slot, stack) }
+            ContainerScreen(ChestMenu.sixRows(0, inventory, container), inventory, Component.literal(title))
+        }
+        context.waitForScreen(ContainerScreen::class.java)
+    }
+
     /** The Hunting Box is stood in for by a chest with the same title, item names and lore. */
     private fun shardTracker(context: ClientGameTestContext, server: TestServerContext) {
         context.waitFor({ ShardRepo.loaded }, 600)
@@ -367,7 +385,71 @@ class NyAddOnsGameTest : FabricClientGameTest {
         }
         context.waitTicks(5)
 
-        // Fusing takes the two ingredients shown on the Confirm Fusion screen off the counts.
+        // Shard Fusion, a six-row menu: one ingredient is already in the machine (row 1), so only the other is lit in the list.
+        openMenu(context, "Shard Fusion", mapOf(
+            10 to headStack("Flitter", "Owned: 10 Shards"), 28 to headStack("Flitter", "Owned: 10 Shards"),
+            29 to headStack("Salmon", "Owned: 7 Shards"), 30 to headStack("Grove", "Owned: 22 Shards"),
+        ))
+        context.waitTicks(15)
+        context.onClient {
+            val lit = FusionTree.highlightedSlots(it.screen as ContainerScreen)
+            check(lit == listOf(29)) { "with Flitter in the machine only Salmon (slot 29) should be lit, got $lit" }
+        }
+        context.takeScreenshot("j-shard-fusion-highlight")
+
+        // F8 copies what is in the menu.
+        context.input.pressKey(297)
+        context.waitTicks(5)
+        context.onClient {
+            val copied = it.keyboardHandler.clipboard
+            check(copied.startsWith("Menu \"Shard Fusion\"") && "slot 29" in copied && "name: Salmon" in copied && "lore: Owned: 7 Shards" in copied) {
+                "the F8 copy was: ${copied.take(200)}"
+            }
+        }
+        context.setScreen { null }
+
+        // With nothing in the machine yet, both ingredients are lit.
+        openMenu(context, "Shard Fusion", mapOf(28 to headStack("Flitter", "Owned: 10 Shards"), 29 to headStack("Salmon", "Owned: 7 Shards")))
+        context.waitTicks(15)
+        context.onClient {
+            val lit = FusionTree.highlightedSlots(it.screen as ContainerScreen)
+            check(lit == listOf(28, 29)) { "with an empty machine both ingredients should be lit, got $lit" }
+        }
+        context.setScreen { null }
+
+        // The Fusion Box has no machine area: whatever is in its list is lit.
+        openMenu(context, "Fusion Box", mapOf(10 to headStack("Flitter", "Owned: 10 Shards"), 11 to headStack("Salmon", "Owned: 7 Shards")))
+        context.waitTicks(15)
+        context.onClient {
+            val lit = FusionTree.highlightedSlots(it.screen as ContainerScreen)
+            check(lit == listOf(10, 11)) { "in the Fusion Box both ingredients should be lit, got $lit" }
+        }
+        context.setScreen { null }
+
+        // Confirm Fusion: the lime button is lit once the screen shows the next fusion.
+        openMenu(context, "Confirm Fusion", mapOf(
+            12 to headStack("Flitter", "Required to fuse: 5"), 14 to headStack("Fusion Ingredient", "Salmon Shard", "Required to fuse: 5"),
+            33 to ItemStack(Items.LIME_TERRACOTTA),
+        ))
+        context.waitTicks(25)
+        context.onClient {
+            val lit = FusionTree.highlightedSlots(it.screen as ContainerScreen)
+            check(lit == listOf(33)) { "the confirm button should be lit, got $lit" }
+        }
+        context.takeScreenshot("k-confirm-fusion-highlight")
+        context.setScreen { null }
+        context.onClient {
+            check(FusionTree.stillNeeded(listOf("A", "A"), listOf("A")) == setOf("A")) { "two of the same shard, one in the machine" }
+            check(FusionTree.stillNeeded(listOf("A", "A"), listOf("A", "A")).isEmpty()) { "two of the same shard, both in the machine" }
+            check(FusionTree.stillNeeded(listOf("A", "B"), listOf("A")) == setOf("B")) { "one of two in the machine" }
+        }
+
+        // Fusing takes the two ingredients shown on the Confirm Fusion screen off the counts,
+        // and the fusions left count down as it happens.
+        val leftBefore = LongArray(1)
+        context.onClient {
+            leftBefore[0] = FusionTracker.totalFusionsLeft(FusionTracker.targets.first { it.shard === grove }.plan.root)
+        }
         context.onClient {
             fun stack(name: String, vararg lore: String) = ItemStack(Items.PLAYER_HEAD).apply {
                 set(DataComponents.CUSTOM_NAME, Component.literal(name))
@@ -382,6 +464,12 @@ class NyAddOnsGameTest : FabricClientGameTest {
             NyEvents.chat.forEach { it("PURE REPTILE You received double shards from the fusion!") }
             check(ShardTracker.progress(grove).owned == 24) { "the doubled fusion was not counted" }
         }
+        context.waitTicks(15)
+        context.onClient {
+            val after = FusionTracker.totalFusionsLeft(FusionTracker.targets.first { it.shard === grove }.plan.root)
+            check(after < leftBefore[0]) { "fusions left went from ${leftBefore[0]} to $after, expected fewer after fusing" }
+        }
+        context.takeScreenshot("l-fusions-left")
 
         // The picker.
         context.onClient { it.connection!!.sendCommand("hunt") }

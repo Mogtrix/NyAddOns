@@ -2,6 +2,7 @@ package dev.nytrix.nyaddons
 
 import dev.nytrix.nyaddons.config.NyConfig
 import dev.nytrix.nyaddons.core.ChatUtils
+import dev.nytrix.nyaddons.core.MenuDump
 import dev.nytrix.nyaddons.core.NyEvents
 import dev.nytrix.nyaddons.core.SkyBlockData
 import dev.nytrix.nyaddons.core.Storage
@@ -53,6 +54,7 @@ object NyAddOns : ClientModInitializer {
 
         ConfigTheme.init()
         OverlayManager.init()
+        MenuDump.init()
         Features.all.forEach { it.init() }
         registerEvents()
         registerCommands()

@@ -42,8 +42,17 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
 - Inside the Fusion Box, Shard Fusion and Confirm Fusion menus, shows how to fuse each tracked
   shard: every step with have/need, finished steps greyed out, and the step you can do now in green.
 - Three styles to choose from: an indented tree, a to-do list in fusing order, or a diagram with icons.
-- Outlines the two shards of the next fusion in the menu.
+- Puts a lime background behind the shards of the next fusion in the menu. In Shard Fusion, a
+  shard that is already in the machine (the top rows) is not lit again, so only what is still
+  missing is; on Confirm Fusion the confirm button is lit when it is the next fusion in the tree.
+- Every fused step shows the fusions it still needs, counting down as you fuse.
 - Fusing subtracts the two ingredients shown on the Confirm Fusion screen from the counts.
+
+**Menu helpers**
+- Above the Hunting Box and Attribute Menu, a hint shows which key tracks a shard.
+- Press `F8` in any menu to copy its title and every item's slot, name and lore to the clipboard.
+  It reads what is on screen and sends nothing anywhere; it is how menus no mod documents get
+  described when something does not line up.
 
 ## Commands
 

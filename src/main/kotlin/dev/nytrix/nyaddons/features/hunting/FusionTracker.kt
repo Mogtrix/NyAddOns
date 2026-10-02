@@ -6,6 +6,7 @@ import dev.nytrix.nyaddons.core.NyEvents
 import dev.nytrix.nyaddons.features.Feature
 import dev.nytrix.nyaddons.gui.Overlay
 import dev.nytrix.nyaddons.gui.OverlayManager
+import net.minecraft.client.Minecraft
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.ceil
@@ -75,11 +76,40 @@ object FusionTracker : Feature {
 
     @Volatile
     private var busy = false
+
+    // Set when a refresh was asked for while another was still being worked out.
+    @Volatile
+    private var pending = false
     private var lastRequest: Any? = null
 
     // Solving is the slow part, so the solved calculator is reused until the settings change.
     @Volatile
     private var calculator: Triple<FusionData, FusionParams, FusionCalculator>? = null
+
+    /**
+     * Fusions still to do for [need] of a shard. The shard being levelled (the [root]) already has what
+     * you own taken off its need, so its count is used as is; for the steps below it, what you hold counts down.
+     */
+    fun fusionsLeft(need: Int, crafts: Long, output: Double, have: Int?, root: Boolean): Long {
+        if (crafts == 0L) return 0
+        if (root || have == null || output <= 0) return crafts
+        if (have >= need) return 0
+        return ceil((need - have) / output - 1e-9).toLong()
+    }
+
+    /** Fusions still to do for a whole tree, leaving out steps that are already done. */
+    fun totalFusionsLeft(node: FusionNode, root: Boolean = true): Long {
+        val have = if (root) null else ShardRepo.byCode(node.shard)?.let { ShardTracker.progress(it).owned }
+        val own = fusionsLeft(ceil(node.quantity).toInt(), node.crafts, node.output, have, root)
+        if (!root && node.crafts > 0 && own == 0L) return 0
+        return own + node.inputs.sumOf { totalFusionsLeft(it, false) }
+    }
+
+    /** Works the trees out again now, so the counters follow a fusion as it happens. */
+    fun requestRefresh() {
+        OverlayManager.invalidate()
+        refresh()
+    }
 
     /** True once the tree for the current tracked shards has been worked out. */
     val upToDate get() = lastRequest != null && !busy
@@ -129,7 +159,11 @@ object FusionTracker : Feature {
             }
             return
         }
-        if (!ShardRepo.loaded || busy) return
+        if (!ShardRepo.loaded) return
+        if (busy) {
+            pending = true
+            return
+        }
 
         val wanted = ShardTracker.trackedShards().filter { it.consumable }.mapNotNull { shard ->
             val owned = ShardTracker.progress(shard).owned ?: 0
@@ -165,6 +199,14 @@ object FusionTracker : Feature {
                 targets = emptyList()
             } finally {
                 busy = false
+                // Back on the game thread: redraw with the new trees, and catch up if something changed meanwhile.
+                Minecraft.getInstance().execute {
+                    OverlayManager.invalidate()
+                    if (pending) {
+                        pending = false
+                        refresh()
+                    }
+                }
             }
         }
     }
@@ -182,7 +224,12 @@ object FusionTracker : Feature {
         return buildList {
             add("§6§lFusion Materials")
             for (target in current) {
-                val how = if (target.plan.direct) "§7hunt it, no fusion is quicker" else "§7${target.plan.crafts} fusions"
+                val left = if (target.plan.direct) 0 else totalFusionsLeft(target.plan.root)
+                val how = when {
+                    target.plan.direct -> "§7hunt it, no fusion is quicker"
+                    left == 1L -> "§71 fusion left"
+                    else -> "§7$left fusions left"
+                }
                 add(" ${target.shard.coloredName} §7x${target.quantity}§8: $how")
             }
             val shards = materials.mapNotNull { (code, amount) -> ShardRepo.byCode(code)?.let { it to ceil(amount).toInt() } }

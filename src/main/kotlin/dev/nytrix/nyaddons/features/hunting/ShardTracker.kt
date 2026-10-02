@@ -15,7 +15,9 @@ import dev.nytrix.nyaddons.gui.OverlayManager
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents
+import com.mojang.blaze3d.platform.InputConstants
 import net.minecraft.client.Minecraft
+import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.core.component.DataComponents
 import net.minecraft.world.entity.player.Inventory
@@ -69,6 +71,7 @@ object ShardTracker : Feature {
     private const val FIRST_INGREDIENT_SLOT = 12
     private const val SECOND_INGREDIENT_SLOT = 14
 
+    private const val HINT_HEIGHT = 14
     private const val READ_INTERVAL_TICKS = 4
     private const val CHEST_COLUMNS = 9
     private val romanNumerals = listOf("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X")
@@ -99,12 +102,13 @@ object ShardTracker : Feature {
                 ::lines,
             ),
         )
-        // The track key only listens in the menus that list shards.
+        // The track key and its hint only exist in the menus that list shards.
         ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
             if (screen !is AbstractContainerScreen<*>) return@register
             val title = ChatUtils.stripColor(screen.title.string)
             if (boxTitle.containsMatchIn(title) || menuTitle.containsMatchIn(title)) {
                 ScreenKeyboardEvents.allowKeyPress(screen).register { _, key -> !onMenuKey(screen, key.key()) }
+                ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawHint(screen, graphics) }
             }
         }
     }
@@ -345,9 +349,25 @@ object ShardTracker : Feature {
         return shard to amount
     }
 
-    fun shardOf(stack: ItemStack): Shard? =
-        ShardRepo.byName(nameOf(stack))
-            ?: loreOf(stack).firstNotNullOfOrNull { sourceLine.find(it) }?.let { ShardRepo.byCode(it.groupValues[1]) }
+    /** The shard an item stands for. Fusion menus name their items differently from the Hunting Box, so several spellings are tried. */
+    fun shardOf(stack: ItemStack): Shard? {
+        val name = nameOf(stack)
+        ShardRepo.byName(name)?.let { return it }
+        ShardRepo.byName(name.removeSuffix(" Shard"))?.let { return it }
+        val lore = loreOf(stack)
+        lore.firstNotNullOfOrNull { sourceLine.find(it) }?.let { match -> ShardRepo.byCode(match.groupValues[1])?.let { return it } }
+        return lore.firstNotNullOfOrNull { ShardRepo.byName(it.removeSuffix(" Shard").removeSuffix(" NEW SHARD")) }
+    }
+
+    /** The two shards last seen on the Confirm Fusion screen. */
+    fun confirmIngredients(): List<Shard> = fusionIngredients.map { it.first }
+
+    private fun drawHint(screen: AbstractContainerScreen<*>, graphics: GuiGraphicsExtractor) {
+        if (!config.enabled || !config.showHint || !SkyBlockData.onSkyBlock) return
+        val key = InputConstants.Type.KEYSYM.getOrCreate(config.trackKey).displayName.string
+        val y = (screen.topPos - HINT_HEIGHT).coerceAtLeast(2)
+        graphics.centeredText(Minecraft.getInstance().font, "§8[§7Ny§8] §ePress §b$key §eto track a shard", screen.width / 2, y, -1)
+    }
 
     /** The track key, pressed while hovering a shard in the Hunting Box or Attribute Menu. */
     private fun onMenuKey(screen: AbstractContainerScreen<*>, key: Int): Boolean {
@@ -403,6 +423,8 @@ object ShardTracker : Feature {
         // Without a starting count from the Hunting Box there is nothing to add to.
         progress.owned = ((progress.owned ?: return) + amount).coerceAtLeast(0)
         Storage.markDirty()
+        // So the overlays and the fusion counters follow the change as it happens.
+        FusionTracker.requestRefresh()
     }
 
     private fun spend(shard: Shard, amount: Int, syphoned: Int) {
@@ -410,6 +432,7 @@ object ShardTracker : Feature {
         progress.owned = progress.owned?.let { (it - amount).coerceAtLeast(0) }
         progress.syphoned = syphoned
         Storage.markDirty()
+        FusionTracker.requestRefresh()
     }
 
     // Alerts and overlay
