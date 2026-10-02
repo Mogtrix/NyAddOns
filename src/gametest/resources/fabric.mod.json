@@ -9,6 +9,22 @@
 			{
 				"adapter": "kotlin",
 				"value": "dev.nytrix.nyaddons.test.NyAddOnsGameTest"
+			},
+			{
+				"adapter": "kotlin",
+				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhouseDataTest"
+			},
+			{
+				"adapter": "kotlin",
+				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhouseStockTest"
+			},
+			{
+				"adapter": "kotlin",
+				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhousePlannerTest"
+			},
+			{
+				"adapter": "kotlin",
+				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhouseScreenTest"
 			}
 		]
 	}

@@ -36,10 +36,21 @@ class ShardProgress(
     var alertedMaxable: Boolean = false,
 )
 
+/** The Greenhouse helper's saved data for one profile. */
+class GreenhouseProfile {
+    /** Mutation ids the player has analysed (ticked in the window, later also read from menus). */
+    var analysed = mutableSetOf<String>()
+
+    /** Sack contents by lower-case item name, and when a sack menu was last read. */
+    var sacks = mutableMapOf<String, Int>()
+    var sacksUpdatedAt = 0L
+}
+
 /** Data that belongs to one SkyBlock profile. */
 class ProfileData {
     var shards = mutableMapOf<String, ShardProgress>()
     var trackedShards = mutableListOf<String>()
+    var greenhouse = GreenhouseProfile()
 }
 
 /** Everything the mod remembers between sessions. Add a field here when a feature needs to persist something. */

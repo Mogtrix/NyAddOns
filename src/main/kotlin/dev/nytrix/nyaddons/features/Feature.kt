@@ -3,6 +3,8 @@ package dev.nytrix.nyaddons.features
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
 import dev.nytrix.nyaddons.features.foraging.HoneycombTreeTimer
 import dev.nytrix.nyaddons.features.foraging.HoneyhiveTimer
+import dev.nytrix.nyaddons.features.greenhouse.GreenhouseFeature
+import dev.nytrix.nyaddons.features.greenhouse.GreenhouseStockFeature
 import dev.nytrix.nyaddons.features.hunting.FusionTracker
 import dev.nytrix.nyaddons.features.hunting.FusionTree
 import dev.nytrix.nyaddons.features.hunting.ShardTracker
@@ -33,5 +35,7 @@ object Features {
         ShardTracker,
         FusionTracker,
         FusionTree,
+        GreenhouseStockFeature,
+        GreenhouseFeature,
     )
 }

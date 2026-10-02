@@ -34,6 +34,11 @@ class NyConfig : Config() {
     var foraging = ForagingConfig()
 
     @Expose
+    @Category(name = "Garden", desc = "Features for the Garden and the Greenhouse.")
+    @JvmField
+    var garden = GardenConfig()
+
+    @Expose
     @Category(name = "Hunting", desc = "Features for shards and attributes.")
     @JvmField
     var hunting = HuntingConfig()
