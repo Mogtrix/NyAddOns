@@ -1,6 +1,6 @@
 # NyAddOns
 
-Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHanni.
+Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric).
 
 ## Features
 
