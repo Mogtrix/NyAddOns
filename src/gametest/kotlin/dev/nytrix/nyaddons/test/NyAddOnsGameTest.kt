@@ -10,7 +10,9 @@ import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.gui.PositionEditorScreen
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
 import com.google.gson.JsonParser
+import dev.nytrix.nyaddons.core.ChatUtils
 import dev.nytrix.nyaddons.features.hunting.FusionCalculator
+import dev.nytrix.nyaddons.features.hunting.ShardRarity
 import dev.nytrix.nyaddons.features.hunting.FusionData
 import dev.nytrix.nyaddons.features.hunting.FusionParams
 import dev.nytrix.nyaddons.features.hunting.FusionRepo
@@ -324,6 +326,36 @@ class NyAddOnsGameTest : FabricClientGameTest {
         }
         context.waitTicks(25)
         context.takeScreenshot("b-shard-overlay")
+
+        // A second tracked shard that needs some of the same shards as Grove: each lists its own materials.
+        run {
+            val data = FusionRepo.data ?: error("fusion data missing")
+            val calculator = FusionCalculator(data, FusionParams())
+            val groveMaterials = calculator.plan(grove.code, 37.0)!!.materials.keys
+            val other = ShardRepo.all.filter { it.consumable && it !== grove && it !== hideonring && it.rarity == ShardRarity.COMMON }
+                .firstOrNull { shard ->
+                    val plan = calculator.plan(shard.code, ShardRepo.totalToMax(shard).toDouble()) ?: return@firstOrNull false
+                    !plan.direct && plan.materials.keys.any { it in groveMaterials }
+                } ?: error("no common shard shares materials with Grove")
+            context.onClient {
+                ShardTracker.toggle(other)
+                FusionTracker.requestRefresh()
+            }
+            context.waitTicks(30)
+            context.waitFor({ FusionTracker.upToDate }, 600)
+            context.onClient {
+                val lines = FusionTracker.lines().map { ChatUtils.stripColor(it) }
+                val shared = groveMaterials.mapNotNull { code -> ShardRepo.byCode(code)?.name }
+                    .filter { name -> lines.count { it.trim().startsWith("$name:") } >= 2 }
+                check(shared.isNotEmpty()) { "a shard needed by two tracked shards should be listed under each, got $lines" }
+                val headings = lines.withIndex().filter { it.value.startsWith(" ") && !it.value.startsWith("  ") && " x" in it.value }
+                check(headings.size >= 2) { "each tracked shard should have its own heading, got $lines" }
+            }
+            context.takeScreenshot("m-fusion-materials-grouped")
+            context.onClient { ShardTracker.toggle(other) }
+            context.waitTicks(30)
+            context.waitFor({ FusionTracker.upToDate }, 600)
+        }
 
         // The fusion tree for what Grove still needs.
         context.waitFor({ FusionRepo.data != null }, 1200)

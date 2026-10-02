@@ -18,7 +18,6 @@ import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.inventory.Slot
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
-import kotlin.math.ceil
 
 /**
  * Inside the fusion menus, shows how to fuse each tracked shard: every step, how many of each
@@ -39,19 +38,15 @@ object FusionTree : Feature {
         val shard: Shard?,
         val have: Int?,
         val need: Int,
-        val crafts: Long,
+        /** Fusions still to do for this step. */
+        val left: Long,
+        /** False for a shard that is hunted. */
+        val fused: Boolean,
         val fuseAmount: Int,
-        val output: Double,
         val root: Boolean,
-        ingredients: List<Entry>,
+        val done: Boolean,
+        val ingredients: List<Entry>,
     ) {
-        val done = !root && have != null && have >= need
-        val ingredients = if (done) emptyList() else ingredients
-        val fused get() = crafts > 0
-
-        /** Fusions still to do for this step; counts down as the shard is made. */
-        val left get() = FusionTracker.fusionsLeft(need, crafts, output, have, root)
-
         /** True when at least one fusion of this step can be done with what is in the box. */
         val doable get() = ingredients.isNotEmpty() && ingredients.all { (it.have ?: 0) >= it.fuseAmount }
         val coloredName get() = color + name
@@ -173,15 +168,14 @@ object FusionTree : Feature {
         return position
     }
 
-    private fun trees(): List<Entry> = FusionTracker.targets.filter { !it.plan.direct }.map { entryOf(it.plan.root, true) }
+    private fun trees(): List<Entry> =
+        FusionTracker.targets.filter { !it.plan.direct }.map { entryOf(FusionTracker.remaining(it.plan.root), true) }
 
-    private fun entryOf(node: FusionNode, root: Boolean): Entry {
-        val shard = ShardRepo.byCode(node.shard)
+    private fun entryOf(step: FusionTracker.Remaining, root: Boolean): Entry {
+        val shard = ShardRepo.byCode(step.node.shard)
         return Entry(
-            shard?.name ?: node.shard, shard?.rarity?.color ?: "§f", shard,
-            if (root) null else shard?.let { ShardTracker.progress(it).owned },
-            ceil(node.quantity).toInt(), node.crafts, node.fuseAmount, node.output, root,
-            node.inputs.map { entryOf(it, false) },
+            shard?.name ?: step.node.shard, shard?.rarity?.color ?: "§f", shard, step.have, step.need, step.left,
+            step.fusion, step.node.fuseAmount, root, step.done, step.inputs.map { entryOf(it, false) },
         )
     }
 
@@ -370,8 +364,8 @@ object FusionTree : Feature {
 
     /** A made-up tree for the position editor, which is opened outside the fusion menus. */
     private fun example(): List<Entry> {
-        fun hunted(name: String, color: String, have: Int, need: Int) = Entry(name, color, null, have, need, 0, 5, 0.0, false, emptyList())
-        val sunFish = Entry("Sun Fish", "§5", null, 3, 20, 4, 5, 5.0, false, listOf(hunted("Azure", "§f", 25, 20), hunted("Verdant", "§f", 8, 20)))
-        return listOf(Entry("Hideonring", "§9", null, null, 16, 8, 5, 2.0, true, listOf(hunted("Bitbug", "§9", 34, 40), sunFish)))
+        fun hunted(name: String, color: String, have: Int, need: Int) = Entry(name, color, null, have, need, 0, false, 5, false, false, emptyList())
+        val sunFish = Entry("Sun Fish", "§5", null, 3, 20, 4, true, 5, false, false, listOf(hunted("Azure", "§f", 25, 20), hunted("Verdant", "§f", 8, 20)))
+        return listOf(Entry("Hideonring", "§9", null, null, 16, 8, true, 5, true, false, listOf(hunted("Bitbug", "§9", 34, 40), sunFish)))
     }
 }

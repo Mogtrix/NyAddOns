@@ -87,23 +87,64 @@ object FusionTracker : Feature {
     private var calculator: Triple<FusionData, FusionParams, FusionCalculator>? = null
 
     /**
-     * Fusions still to do for [need] of a shard. The shard being levelled (the [root]) already has what
-     * you own taken off its need, so its count is used as is; for the steps below it, what you hold counts down.
+     * One step of a tree with what is still left to do, given what the player already holds.
+     *
+     * @param required how many of this shard the tree calls for
+     * @param have how many are in the Hunting Box; null for the shard being levelled and when not known yet
+     * @param left fusions still to do for this step
+     * @param done true when what is held already covers the step, so nothing below it is needed
      */
-    fun fusionsLeft(need: Int, crafts: Long, output: Double, have: Int?, root: Boolean): Long {
-        if (crafts == 0L) return 0
-        if (root || have == null || output <= 0) return crafts
-        if (have >= need) return 0
-        return ceil((need - have) / output - 1e-9).toLong()
+    class Remaining(
+        val node: FusionNode,
+        val required: Double,
+        val have: Int?,
+        val left: Long,
+        val done: Boolean,
+        val inputs: List<Remaining>,
+    ) {
+        val need get() = ceil(required - EPSILON).toInt()
+
+        /** False for a shard that is hunted. */
+        val fusion get() = node.inputs.isNotEmpty()
     }
 
-    /** Fusions still to do for a whole tree, leaving out steps that are already done. */
-    fun totalFusionsLeft(node: FusionNode, root: Boolean = true): Long {
+    /**
+     * Works out what is still left of a tree. A step in the middle that you already hold enough of
+     * is finished and everything below it drops out; one you hold part of needs fewer fusions, and
+     * so fewer of the shards under it.
+     */
+    fun remaining(node: FusionNode, required: Double = node.quantity, root: Boolean = true): Remaining {
         val have = if (root) null else ShardRepo.byCode(node.shard)?.let { ShardTracker.progress(it).owned }
-        val own = fusionsLeft(ceil(node.quantity).toInt(), node.crafts, node.output, have, root)
-        if (!root && node.crafts > 0 && own == 0L) return 0
-        return own + node.inputs.sumOf { totalFusionsLeft(it, false) }
+        if (node.inputs.isEmpty()) return Remaining(node, required, have, 0, false, emptyList())
+        // The shard being levelled already has what you own taken off, so only the steps below it count what is held.
+        val outstanding = required - (have ?: 0)
+        if (!root && outstanding <= EPSILON) return Remaining(node, required, have, 0, true, emptyList())
+        val crafts = if (node.output > 0) ceil(outstanding / node.output - EPSILON).toLong() else node.crafts
+        val share = if (required > 0) (outstanding / required).coerceAtMost(1.0) else 1.0
+        val inputs = node.inputs.map { child ->
+            // A fusion uses up fuseAmount of each ingredient; fusions in a loop keep their original sizes, scaled down.
+            val needed = if (node.output > 0) (crafts * child.fuseAmount).toDouble() else child.quantity * share
+            remaining(child, needed, false)
+        }
+        return Remaining(node, required, have, crafts, false, inputs)
     }
+
+    /** Fusions still to do for a whole tree. */
+    fun totalFusionsLeft(step: Remaining): Long = step.left + step.inputs.sumOf(::totalFusionsLeft)
+
+    fun totalFusionsLeft(node: FusionNode): Long = totalFusionsLeft(remaining(node))
+
+    /** The shards that still have to be hunted for a tree, by shard code. */
+    fun materialsOf(step: Remaining, into: MutableMap<String, Double> = LinkedHashMap()): Map<String, Double> {
+        when {
+            step.done -> {}
+            !step.fusion -> into.merge(step.node.shard, step.required, Double::plus)
+            else -> step.inputs.forEach { materialsOf(it, into) }
+        }
+        return into
+    }
+
+    private const val EPSILON = 1e-9
 
     /** Works the trees out again now, so the counters follow a fusion as it happens. */
     fun requestRefresh() {
@@ -211,36 +252,38 @@ object FusionTracker : Feature {
         }
     }
 
-    private fun lines(): List<String> {
+    /**
+     * The overlay's lines. Each tracked shard has its own materials listed under it, so two shards
+     * that need the same hunted shard each show it, with what that shard's tree calls for.
+     */
+    fun lines(): List<String> {
         if (!config.enabled) return emptyList()
         val current = targets
         if (current.isEmpty()) return emptyList()
-
-        val materials = LinkedHashMap<String, Double>()
-        for (target in current) {
-            if (target.plan.direct) continue
-            for ((code, amount) in target.plan.materials) materials.merge(code, amount, Double::plus)
-        }
         return buildList {
             add("§6§lFusion Materials")
             for (target in current) {
-                val left = if (target.plan.direct) 0 else totalFusionsLeft(target.plan.root)
+                val steps = remaining(target.plan.root)
+                val left = if (target.plan.direct) 0 else totalFusionsLeft(steps)
                 val how = when {
                     target.plan.direct -> "§7hunt it, no fusion is quicker"
                     left == 1L -> "§71 fusion left"
                     else -> "§7$left fusions left"
                 }
                 add(" ${target.shard.coloredName} §7x${target.quantity}§8: $how")
-            }
-            val shards = materials.mapNotNull { (code, amount) -> ShardRepo.byCode(code)?.let { it to ceil(amount).toInt() } }
-            for ((shard, need) in shards.sortedWith(compareBy({ it.first.rarity }, { it.first.name }))) {
-                val owned = ShardTracker.progress(shard).owned
-                val have = when {
-                    owned == null -> "§7?"
-                    owned >= need -> "§a$owned"
-                    else -> "§c$owned"
+                if (target.plan.direct) continue
+                val materials = materialsOf(steps).mapNotNull { (code, amount) ->
+                    ShardRepo.byCode(code)?.let { it to ceil(amount - EPSILON).toInt() }
                 }
-                add("  ${shard.coloredName}§7: $have§7/§f$need")
+                for ((shard, need) in materials.sortedWith(compareBy({ it.first.rarity }, { it.first.name }))) {
+                    val owned = ShardTracker.progress(shard).owned
+                    val have = when {
+                        owned == null -> "§7?"
+                        owned >= need -> "§a$owned"
+                        else -> "§c$owned"
+                    }
+                    add("  ${shard.coloredName}§7: $have§7/§f$need")
+                }
             }
         }
     }
