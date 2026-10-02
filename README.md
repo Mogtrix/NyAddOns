@@ -66,7 +66,7 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric).
 - `/mf` opens a menu: pick a Bestiary category from the dropdown and tick the mobs you want. Everything
   is off except King Minos, Minos Inquisitors and the highest tier of each slayer boss.
 - Click the `>` on a mob in `/mf` to list all its drops; click a drop to follow it (click again to stop).
-- `/trackmob <mob>` asks which drop you are going for (click one in chat, or `/trackmob <mob> #2`, `#all`). Kills of that
+- `/ny trackmob <mob>` asks which drop you are going for (click one in chat, or `/ny trackmob <mob> #2`, `#all`). Kills of that
   mob then print that drop's base odds, then the odds with your Magic Find (and Looting, where it applies).
   Tracking many mobs can spam chat.
 - Kills are detected from name tags and your hits, so ranged or indirect kills can be missed.
@@ -82,7 +82,7 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric).
 | `/hunt <shard>` | Track or untrack a shard |
 | `/hunt clear` | Stop tracking all shards |
 | `/mf` or `/ny mf` | Choose which mobs show Magic Find |
-| `/trackmob <mob>` | Track a mob's rare drop odds (again to stop, `clear` for all) |
+| `/ny trackmob <mob>` | Track a mob's rare drop odds (again to stop, `clear` for all) |
 
 ## Installing
 

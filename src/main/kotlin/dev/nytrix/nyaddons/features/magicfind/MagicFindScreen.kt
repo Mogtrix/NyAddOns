@@ -120,7 +120,7 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
         rows = built
         val on = mobs.count { it.id in config.enabledMobs }
         header = "§f$on §7of §f${mobs.size} §7enabled"
-        footer = "§7Click > for a mob's drops, click a drop to track it (§e/trackmob§7): §f${config.trackedMobs.size} §7tracked"
+        footer = "§7Click > for a mob's drops, click a drop to track it (§e/ny trackmob§7): §f${config.trackedMobs.size} §7tracked"
         scroll = scroll.coerceIn(0, maxScroll)
     }
 

@@ -258,7 +258,7 @@ object MagicFindDataImpl : MfData {
         }
         if (slayers.isNotEmpty()) categories.add(MfCategory("slayer_bosses", SLAYER_CATEGORY, slayers))
 
-        // Any other mob with an MF-affected drop, found by name for /trackmob.
+        // Any other mob with an MF-affected drop, found by name for /ny trackmob.
         for ((key, g) in groups) {
             if (!g.eligible || g.tier > 0 || key in allMobs || used.containsKey(key)) continue
             allMobs[key] = MfMob(key, g.name, OTHER_CATEGORY, compact(g.drops), 0, false)

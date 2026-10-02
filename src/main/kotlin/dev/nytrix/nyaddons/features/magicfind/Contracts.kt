@@ -35,7 +35,7 @@ interface MfData {
     /** Any mob in the game with an MF-affected drop (also ones not in the menu), by name-tag name (case/punctuation/level ignored). */
     fun mob(name: String): MfMob?
 
-    /** Every known mob name, for /trackmob tab completion. */
+    /** Every known mob name, for /ny trackmob tab completion. */
     fun mobNames(): List<String>
 
     /** Starts the background load / daily refresh if needed. Cheap to call repeatedly. */

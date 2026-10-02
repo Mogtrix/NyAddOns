@@ -29,7 +29,7 @@ enum class MfBreakdown(private val displayName: String) {
 class MagicFindConfig {
 
     @Expose
-    @ConfigOption(name = "Enabled", desc = "Print the Magic Find that applies when you kill a mob chosen in §e/mf§7, and the odds for mobs from §e/trackmob§7.")
+    @ConfigOption(name = "Enabled", desc = "Print the Magic Find that applies when you kill a mob chosen in §e/mf§7, and the odds for mobs from §e/ny trackmob§7.")
     @ConfigEditorBoolean
     @JvmField
     var enabled = true
@@ -47,7 +47,7 @@ class MagicFindConfig {
     var breakdown = MfBreakdown.HOVER
 
     @Expose
-    @ConfigOption(name = "/trackmob Odds", desc = "Print the odds of each Magic Find drop for mobs you track with §e/trackmob§7.")
+    @ConfigOption(name = "/ny trackmob Odds", desc = "Print the odds of each Magic Find drop for mobs you track with §e/ny trackmob§7.")
     @ConfigEditorBoolean
     @JvmField
     var trackOdds = true
@@ -62,7 +62,7 @@ class MagicFindConfig {
     @JvmField
     var defaultsApplied = false
 
-    /** Mobs followed with /trackmob. */
+    /** Mobs followed with /ny trackmob. */
     @Expose
     @JvmField
     var trackedMobs = mutableSetOf<String>()

@@ -1,6 +1,6 @@
 # Magic Find helper: notes for implementers (v0.6.1)
 
-Feature: when the player kills a mob that has a drop MF can affect, print the Magic Find that applies to THAT mob in chat; `/trackmob <mob>` prints
+Feature: when the player kills a mob that has a drop MF can affect, print the Magic Find that applies to THAT mob in chat; `/ny trackmob <mob>` prints
 the odds of each MF-affected drop at the player's MF; a menu picks which mobs report. Client only: no Hypixel web API, no Bazaar.
 
 ## Decisions made with the user
@@ -20,7 +20,7 @@ the odds of each MF-affected drop at the player's MF; a menu picks which mobs re
   mining_3 Dwarven Mines, mythological_creatures Mythological Creatures, fishing Fishing (has subcategories), kuudra Kuudra, plus virtual "Slayer Bosses".
   Include foraging_2 (Moonglade Marsh) and foraging_3 (Torrhus Canyon) only for mobs that have a drop < 5%. NOT shown: dynamic (Private Island), hub,
   farming_1, mining_2, foraging_1, garden, lotus_atoll, safari, spooky_festival, jerry, catacombs (unverified whether MF applies in dungeons).
-- /trackmob works for ANY mob in the game (also those not in the menu): `/trackmob <mob>` toggles, `/trackmob clear`, plain `/trackmob` lists. Tab-complete mob
+- /trackmob works for ANY mob in the game (also those not in the menu): `/ny trackmob <mob>` toggles, `/ny trackmob clear`, plain `/ny trackmob` lists. Tab-complete mob
   names. Print a one-line warning when a mob is added: tracking may spam chat. Tracked mobs report on kill even if not enabled in the menu.
   Per kill of a tracked mob print MF, then each MF-affected drop (base chance < 5%, plus pet drops) as e.g.
   `Stick: 1 in 16,667 base → 1 in 1,234 with Magic Find (+Looting V)`. Show the "base" part and the "with MF" part; include Looting only if the held weapon has it

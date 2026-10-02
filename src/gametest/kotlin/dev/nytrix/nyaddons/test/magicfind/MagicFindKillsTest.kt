@@ -135,7 +135,7 @@ class MagicFindKillsTest : FabricClientGameTest {
                     MfTrackCommand.run("")
                 }
                 check(lines() == listOf(
-                    "Not tracking any mob. Use /trackmob <mob>.",
+                    "Not tracking any mob. Use /ny trackmob <mob>.",
                     "Which drop are you going for on Minotaur? Click one:",
                     "[All drops]",
                     "1. Stick ${MfMath.oneIn(minotaur.drops[0].chance)}",
@@ -148,7 +148,7 @@ class MagicFindKillsTest : FabricClientGameTest {
                     "Stopped tracking Minotaur.",
                     "Tracking Minotaur: all drops. Warning: this can spam chat.",
                     "Stopped tracking all mobs.",
-                    "Not tracking any mob. Use /trackmob <mob>.",
+                    "Not tracking any mob. Use /ny trackmob <mob>.",
                 )) { "trackmob: ${lines()}" }
 
                 // Odds: tracked mob that is not enabled in the menu still reports. Looting 3, MF 312.

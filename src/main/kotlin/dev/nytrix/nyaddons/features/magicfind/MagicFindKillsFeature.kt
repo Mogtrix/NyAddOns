@@ -6,7 +6,7 @@ import dev.nytrix.nyaddons.features.Feature
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback
 import net.minecraft.world.InteractionResult
 
-/** Detects kills of enabled/tracked mobs, prints the Magic Find report and handles `/trackmob`. */
+/** Detects kills of enabled/tracked mobs, prints the Magic Find report and handles `/ny trackmob`. */
 object MagicFindKillsFeature : Feature {
     override fun init() {
         MagicFind.kills = MfKillTracker
@@ -18,5 +18,5 @@ object MagicFindKillsFeature : Feature {
         }
     }
 
-    override fun commands(): List<Command> = listOf(MfTrackCommand.command())
+    override fun subcommands(): List<Command> = listOf(MfTrackCommand.command())
 }

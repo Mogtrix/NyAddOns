@@ -10,7 +10,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.Style
 
-/** `/trackmob [mob|clear]`; `/trackmob <mob> #<n>` or `#all` picks the drop to follow. */
+/** `/ny trackmob [mob|clear]`; `/ny trackmob <mob> #<n>` or `#all` picks the drop to follow. */
 object MfTrackCommand {
 
     private val config get() = NyAddOns.config.combat.magicFind
@@ -46,7 +46,7 @@ object MfTrackCommand {
         val query = argument.trim()
         val tracked = config.trackedMobs
         if (query.isEmpty()) {
-            if (tracked.isEmpty()) say("Not tracking any mob. Use §e/trackmob <mob>§e.")
+            if (tracked.isEmpty()) say("Not tracking any mob. Use §e/ny trackmob <mob>§e.")
             else say("Tracking: §a" + tracked.sorted().joinToString("§7, §a") { MagicFind.data.mob(it)?.name ?: it })
             return
         }
@@ -103,7 +103,7 @@ object MfTrackCommand {
     private fun option(mob: MfMob, pick: String, label: String): Component =
         Component.literal(label).withStyle(
             Style.EMPTY
-                .withClickEvent(ClickEvent.RunCommand("trackmob ${mob.name} #$pick"))
+                .withClickEvent(ClickEvent.RunCommand("ny trackmob ${mob.name} #$pick"))
                 .withHoverEvent(HoverEvent.ShowText(Component.literal("§7Click to track"))),
         )
 }
