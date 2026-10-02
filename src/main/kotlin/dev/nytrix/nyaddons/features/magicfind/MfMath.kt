@@ -15,7 +15,11 @@ object MfMath {
     /** Magic Find only affects drops whose chance is strictly below this. */
     const val MF_THRESHOLD = 0.05
 
-    /** Looting multiplies the base chance before Magic Find. Placeholder until verified against the wiki. */
+    /**
+     * Looting multiplies the base chance before Magic Find: final = base x (1 + 0.15 x level), so the 5% check uses the boosted chance (Looting V on a
+     * 3% drop gives 5.25%, which MF no longer boosts). Verified against hypixelskyblock.minecraft.wiki/w/Looting (raw wikitext) and /w/Magic_Find
+     * (cap 900, drops of 5% or above are unaffected, pet drops use MF + Pet Luck).
+     */
     fun lootingMultiplier(level: Int): Double = 1.0 + 0.15 * level.coerceAtLeast(0)
 
     /**
