@@ -80,7 +80,9 @@ object FusionTree : Feature {
             if (!ShardTracker.isFusionMenu(title)) return@register
             menuHooks++
             val kind = kindOf(title)
-            ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawInMenu(screen, kind, graphics) }
+            // The tree goes in the background, behind the panel, slots and items; the lime highlights stay on top of them.
+            ScreenEvents.afterBackground(screen).register { _, graphics, _, _, _ -> drawTree(screen, kind, graphics) }
+            ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawHighlights(screen, kind, graphics) }
         }
     }
 
@@ -200,10 +202,9 @@ object FusionTree : Feature {
         frameFor(screen, kindOf(ChatUtils.stripColor(screen.title.string)))
     }
 
-    private fun drawInMenu(screen: AbstractContainerScreen<*>, kind: MenuKind, graphics: GuiGraphicsExtractor) {
+    private fun drawTree(screen: AbstractContainerScreen<*>, kind: MenuKind, graphics: GuiGraphicsExtractor) {
         if (!config.enabled || !SkyBlockData.onSkyBlock) return
-        val frame = frameFor(screen, kind)
-        val content = frame.content ?: return
+        val content = frameFor(screen, kind).content ?: return
         val position = position()
         // Pulled back on screen if it would run off the right or bottom edge, without moving where it is saved.
         val scale = OverlayManager.scaleOf(position)
@@ -212,8 +213,29 @@ object FusionTree : Feature {
             position.y.coerceIn(0, (screen.height - (content.height * scale).toInt()).coerceAtLeast(0)),
             position.scale,
         )
-        OverlayManager.draw(graphics, shown, content)
+        // ContainerScreen draws its panel inside extractBackground, so no hook runs between the dimmed background and the
+        // panel. Draw after both, but only outside the panel's rectangle: the tree is then hidden wherever the menu is.
+        val left = screen.leftPos
+        val top = screen.topPos
+        val right = left + screen.imageWidth
+        val bottom = top + screen.imageHeight
+        val w = screen.width
+        val h = screen.height
+        fun clipped(x0: Int, y0: Int, x1: Int, y1: Int) {
+            if (x1 <= x0 || y1 <= y0) return
+            graphics.enableScissor(x0, y0, x1, y1)
+            OverlayManager.draw(graphics, shown, content)
+            graphics.disableScissor()
+        }
+        clipped(0, 0, w, top)
+        clipped(0, bottom, w, h)
+        clipped(0, top, left, bottom)
+        clipped(right, top, w, bottom)
+    }
 
+    private fun drawHighlights(screen: AbstractContainerScreen<*>, kind: MenuKind, graphics: GuiGraphicsExtractor) {
+        if (!config.enabled || !SkyBlockData.onSkyBlock) return
+        val frame = frameFor(screen, kind)
         // A lime background behind the item: fill the slot, then put the item back on top of it.
         val font = Minecraft.getInstance().font
         for (slot in frame.highlighted) {
