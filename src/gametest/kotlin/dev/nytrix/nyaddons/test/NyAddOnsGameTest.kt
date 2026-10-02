@@ -14,7 +14,9 @@ import dev.nytrix.nyaddons.core.ChatUtils
 import dev.nytrix.nyaddons.features.hunting.FusionCalculator
 import dev.nytrix.nyaddons.features.hunting.ShardRarity
 import dev.nytrix.nyaddons.features.hunting.FusionData
+import dev.nytrix.nyaddons.features.hunting.FusionNode
 import dev.nytrix.nyaddons.features.hunting.FusionParams
+import dev.nytrix.nyaddons.features.hunting.FusionPlan
 import dev.nytrix.nyaddons.features.hunting.FusionRepo
 import dev.nytrix.nyaddons.config.FusionTreeStyle
 import dev.nytrix.nyaddons.features.hunting.FusionTracker
@@ -22,6 +24,7 @@ import dev.nytrix.nyaddons.features.hunting.FusionTree
 import dev.nytrix.nyaddons.features.hunting.ShardPickerScreen
 import dev.nytrix.nyaddons.features.hunting.ShardRepo
 import dev.nytrix.nyaddons.features.hunting.ShardTracker
+import kotlin.math.ceil
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestServerContext
 import net.minecraft.client.gui.screens.inventory.ContainerScreen
@@ -212,6 +215,68 @@ class NyAddOnsGameTest : FabricClientGameTest {
      * for every shard. `fusion/reference.json` was produced by running SkyShards' own code on the
      * data files next to it.
      */
+    /** A fused shard in the middle of a tree that is already held drops out, with everything below it. */
+    private fun fusionMaterialsFollowTheTree(context: ClientGameTestContext) {
+        context.onClient {
+            val data = FusionRepo.data ?: error("fusion data missing")
+            val calculator = FusionCalculator(data, FusionParams())
+
+            fun leaves(node: FusionNode): List<String> =
+                if (node.inputs.isEmpty()) listOf(node.shard) else node.inputs.flatMap(::leaves)
+            fun codes(node: FusionNode): List<String> = listOf(node.shard) + node.inputs.flatMap(::codes)
+
+            var picked: Triple<Shard, FusionPlan, Int>? = null
+            for (shard in ShardRepo.all.filter { it.consumable }) {
+                val plan = calculator.plan(shard.code, ShardRepo.totalToMax(shard).toDouble()) ?: continue
+                if (plan.direct) continue
+                val steps = FusionTracker.remaining(plan.root)
+                val all = codes(plan.root)
+                val index = steps.inputs.indices.firstOrNull { i ->
+                    val child = steps.inputs[i]
+                    val owner = ShardRepo.byCode(child.node.shard)
+                    owner != null && child.fusion && child.node.output > 0 && child.left >= 2 &&
+                        child.required - ceil(child.node.output) > 0 && all.count { it == child.node.shard } == 1
+                } ?: continue
+                picked = Triple(shard, plan, index)
+                break
+            }
+            val (_, plan, index) = picked ?: error("no shard has a fused step in the middle of its tree")
+            val childNode = plan.root.inputs[index]
+            val childShard = ShardRepo.byCode(childNode.shard)!!
+            val progress = ShardTracker.progress(childShard)
+            val previous = progress.owned
+            try {
+                val before = FusionTracker.remaining(plan.root)
+                val materialsBefore = FusionTracker.materialsOf(before)
+                val child = before.inputs[index]
+                val belowOnly = leaves(childNode).toSet() - plan.root.inputs.filterIndexed { i, _ -> i != index }.flatMap(::leaves).toSet()
+                check(belowOnly.isNotEmpty() && belowOnly.all { it in materialsBefore }) { "expected materials only below ${childShard.name}, got $belowOnly" }
+
+                // Part of the step held: fewer fusions, fewer of its ingredients, but it still counts.
+                progress.owned = ceil(childNode.output).toInt()
+                val part = FusionTracker.remaining(plan.root).inputs[index]
+                check(!part.done) { "${childShard.name} held in part must not be done" }
+                check(part.left in 1 until child.left) { "${childShard.name} left ${part.left}, was ${child.left}" }
+                check(part.inputs.zip(child.inputs).all { (a, b) -> a.required < b.required }) { "ingredients of ${childShard.name} should need fewer when it is held in part" }
+                val materialsPart = FusionTracker.materialsOf(FusionTracker.remaining(plan.root))
+                check(materialsPart.values.sum() < materialsBefore.values.sum()) { "holding part of ${childShard.name} should lower the materials" }
+                check(materialsPart.values.all { it >= 0.0 }) { "materials went negative: $materialsPart" }
+
+                // All of it held: the step is done and everything below it is gone.
+                progress.owned = ceil(child.required).toInt()
+                val after = FusionTracker.remaining(plan.root)
+                check(after.inputs[index].done) { "${childShard.name} should be done when it is covered" }
+                check(after.inputs[index].inputs.isEmpty()) { "a finished step keeps no inputs" }
+                val materialsAfter = FusionTracker.materialsOf(after)
+                check(materialsAfter.values.sum() < materialsPart.values.sum()) { "covering ${childShard.name} should lower the materials" }
+                check(belowOnly.none { it in materialsAfter }) { "materials below ${childShard.name} remain: ${belowOnly.filter { it in materialsAfter }}" }
+                check(FusionTracker.totalFusionsLeft(after) < FusionTracker.totalFusionsLeft(before)) { "fusions left should drop" }
+            } finally {
+                progress.owned = previous
+            }
+        }
+    }
+
     private fun fusionCalculatorMatchesSkyShards() {
         fun resource(name: String) = javaClass.getResourceAsStream("/fusion/$name") ?: error("missing test resource $name")
         val data = FusionData(
@@ -356,6 +421,8 @@ class NyAddOnsGameTest : FabricClientGameTest {
             context.waitTicks(30)
             context.waitFor({ FusionTracker.upToDate }, 600)
         }
+
+        fusionMaterialsFollowTheTree(context)
 
         // The fusion tree for what Grove still needs.
         context.waitFor({ FusionRepo.data != null }, 1200)
