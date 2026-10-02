@@ -49,7 +49,7 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
 - Fusing subtracts the two ingredients shown on the Confirm Fusion screen from the counts.
 
 **Menu helpers**
-- Above the Hunting Box and Attribute Menu, a hint shows which key tracks a shard.
+- At the top of the screen in the Hunting Box and Attribute Menu, a hint shows which key tracks a shard.
 - Press `F8` in any menu to copy its title and every item's slot, name and lore to the clipboard.
   It reads what is on screen and sends nothing anywhere; it is how menus no mod documents get
   described when something does not line up.
