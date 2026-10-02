@@ -71,7 +71,7 @@ object ShardTracker : Feature {
     private const val FIRST_INGREDIENT_SLOT = 12
     private const val SECOND_INGREDIENT_SLOT = 14
 
-    private const val HINT_HEIGHT = 14
+    private const val HINT_TOP_MARGIN = 6
     private const val READ_INTERVAL_TICKS = 4
     private const val CHEST_COLUMNS = 9
     private val romanNumerals = listOf("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X")
@@ -365,7 +365,7 @@ object ShardTracker : Feature {
     private fun drawHint(screen: AbstractContainerScreen<*>, graphics: GuiGraphicsExtractor) {
         if (!config.enabled || !config.showHint || !SkyBlockData.onSkyBlock) return
         val key = InputConstants.Type.KEYSYM.getOrCreate(config.trackKey).displayName.string
-        val y = (screen.topPos - HINT_HEIGHT).coerceAtLeast(2)
+        val y = HINT_TOP_MARGIN
         graphics.centeredText(Minecraft.getInstance().font, "§8[§7Ny§8] §ePress §b$key §eto track a shard", screen.width / 2, y, -1)
     }
 
