@@ -65,6 +65,7 @@ class MagicFindKillsTest : FabricClientGameTest {
                     MfKillTracker.reset(); MfReporter.reset()
                     MfReporter.sink = { out += it }
                     MfTrackCommand.say = { out += Component.literal(it) }
+                    MfTrackCommand.sayComponent = { out += it }
                     cfg().enabled = true
                     cfg().windowSeconds = 1f
                     cfg().breakdown = MfBreakdown.HOVER
@@ -119,20 +120,33 @@ class MagicFindKillsTest : FabricClientGameTest {
                 context.runOnClient<RuntimeException> {
                     MfTrackCommand.run("")
                     MfTrackCommand.run("minotaur")
+                    check(cfg().trackedMobs.isEmpty()) { "asking must not track yet" }
+                    MfTrackCommand.run("minotaur #9")
+                    MfTrackCommand.run("minotaur #1")
+                    check(cfg().trackedDrops["minotaur"] == "Stick") { "picked drop: ${cfg().trackedDrops}" }
                     MfTrackCommand.run("Revenant Horror")
                     MfTrackCommand.run("nothing")
                     MfTrackCommand.run("")
                     MfTrackCommand.run("minotaur")
+                    check(cfg().trackedDrops.isEmpty()) { "untrack clears the drop: ${cfg().trackedDrops}" }
+                    MfTrackCommand.run("minotaur #all")
+                    check(cfg().trackedMobs.contains("minotaur") && cfg().trackedDrops.isEmpty()) { "all drops" }
                     MfTrackCommand.run("clear")
                     MfTrackCommand.run("")
                 }
                 check(lines() == listOf(
                     "Not tracking any mob. Use /trackmob <mob>.",
-                    "Tracking Minotaur. Warning: this can spam chat.",
+                    "Which drop are you going for on Minotaur? Click one:",
+                    "[All drops]",
+                    "1. Stick ${MfMath.oneIn(minotaur.drops[0].chance)}",
+                    "2. Bone ${MfMath.oneIn(minotaur.drops[1].chance)}",
+                    "Pick a number from 1 to 2, or #all.",
+                    "Tracking Minotaur: Stick. Warning: this can spam chat.",
                     "Tracking Revenant Horror. Warning: this can spam chat.",
                     "No mob with Magic Find drops is called \"nothing\".",
                     "Tracking: Minotaur, Revenant Horror",
                     "Stopped tracking Minotaur.",
+                    "Tracking Minotaur: all drops. Warning: this can spam chat.",
                     "Stopped tracking all mobs.",
                     "Not tracking any mob. Use /trackmob <mob>.",
                 )) { "trackmob: ${lines()}" }
@@ -167,6 +181,14 @@ class MagicFindKillsTest : FabricClientGameTest {
                 context.runOnClient<RuntimeException> { MfKillTracker.registerKill(revenant) }
                 context.waitTicks(40)
                 check(lines() == listOf("Revenant Horror: 312% Magic Find")) { "slayer note repeated: ${lines()}" }
+
+                // One chosen drop: only its odds are shown.
+                out.clear()
+                cfg().trackedDrops["minotaur"] = "Bone"
+                context.runOnClient<RuntimeException> { MfKillTracker.registerKill(minotaur) }
+                context.waitTicks(40)
+                check(lines() == listOf("Minotaur: 312% Magic Find", "Bone: ${odds(minotaur.drops[1], 312.0)} (+Looting III)")) { "chosen drop: ${lines()}" }
+                cfg().trackedDrops.clear()
 
                 // Odds off.
                 out.clear()
@@ -257,6 +279,7 @@ class MagicFindKillsTest : FabricClientGameTest {
             MagicFind.stats = oldStats
             MfReporter.sink = { ChatUtils.chat(it) }
             MfTrackCommand.say = { ChatUtils.chat(it) }
+            MfTrackCommand.sayComponent = { ChatUtils.chat(it) }
             System.clearProperty("nyaddons.devArea")
         }
     }

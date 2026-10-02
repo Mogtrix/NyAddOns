@@ -66,4 +66,9 @@ class MagicFindConfig {
     @Expose
     @JvmField
     var trackedMobs = mutableSetOf<String>()
+
+    /** For a tracked mob, the one drop (item name) its odds are shown for; no entry means every drop. */
+    @Expose
+    @JvmField
+    var trackedDrops = mutableMapOf<String, String>()
 }

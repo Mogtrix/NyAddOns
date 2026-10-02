@@ -111,6 +111,24 @@ class MagicFindWindowTest : FabricClientGameTest {
         check("revenant_horror_v" !in enabled(context)) { "Slayer checkbox failed" }
         click(context) { it.checkboxCenter(0) }
 
+        // Drop dropdown: the arrow expands a mob's drops, clicking a drop follows it, clicking it again stops.
+        pick(context, 0)
+        val collapsed = screen(context).rowCount
+        click(context) { it.arrowCenter(0) }
+        check(screen(context).rowCount > collapsed) { "arrow did not list the drops (${screen(context).rowCount} vs $collapsed)" }
+        context.takeScreenshot("mf-8-drops-854")
+        val firstId = categories[0].mobs[0].id
+        check("broodmother" == firstId) { "fixture changed: $firstId" }
+        click(context) { it.dropRowCenter(1) }
+        check(cfg.trackedMobs.contains(firstId) && cfg.trackedDrops[firstId] != null) { "clicking a drop did not follow it: ${cfg.trackedDrops}" }
+        context.waitTicks(2)
+        context.takeScreenshot("mf-9-drop-tracked-854")
+        click(context) { it.dropRowCenter(1) }
+        check(!cfg.trackedMobs.contains(firstId) && cfg.trackedDrops.isEmpty()) { "clicking the drop again did not stop" }
+        click(context) { it.arrowCenter(0) }
+        check(screen(context).rowCount == collapsed) { "arrow did not collapse" }
+        check(firstId !in enabled(context)) { "arrow toggled the checkbox" }
+
         context.input.resizeWindow(1280, 720)
         context.waitTicks(10)
         context.takeScreenshot("mf-5-slayer-1280")

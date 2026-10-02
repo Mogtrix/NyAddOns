@@ -85,7 +85,8 @@ object MfReporter {
         val stats = MagicFind.stats
         val looting = stats.looting
         val petLuck = stats.petLuck ?: 0.0
-        val sorted = mob.drops.sortedWith(compareBy({ it.special }, { it.chance }))
+        val only = config.trackedDrops[mob.id]
+        val sorted = mob.drops.filter { only == null || it.item == only }.sortedWith(compareBy({ it.special }, { it.chance }))
         for ((i, drop) in sorted.withIndex()) {
             if (i == MAX_DROPS) {
                 sink(Component.literal("§7+${sorted.size - MAX_DROPS} more"))

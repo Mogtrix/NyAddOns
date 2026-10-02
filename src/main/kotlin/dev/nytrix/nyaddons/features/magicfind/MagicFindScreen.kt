@@ -8,7 +8,7 @@ import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
 
 /** One prepared row: strings and widths are computed when the model is rebuilt, not while drawing. */
-private class MobRow(val id: String, val name: String, val hint: String, val nameWidth: Int)
+private class MobRow(val id: String, val name: String, val hint: String, val nameWidth: Int, val drop: String? = null, val expandable: Boolean = false)
 
 /** The `/mf` window: a category dropdown and a checkbox list of the mobs whose Magic Find is reported on kill. */
 class MagicFindScreen : Screen(Component.literal("Magic Find")) {
@@ -24,6 +24,7 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
     private var category = 0
     private var scroll = 0
     private var version = 0
+    private val expanded = HashSet<String>()
 
     // Model cache: rebuilt only when this key changes.
     private var builtFor: List<MfCategory>? = null
@@ -72,6 +73,7 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
     }
 
     override fun removed() {
+        expanded.clear()
         rows = emptyList()
         categories = emptyList()
         categoryNames = emptyArray()
@@ -98,16 +100,31 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
         category = category.coerceIn(0, (list.size - 1).coerceAtLeast(0))
         val mobs = list.getOrNull(category)?.mobs ?: emptyList()
         val maxHint = listRight - listLeft - 40
-        rows = mobs.map { mob ->
+        val built = ArrayList<MobRow>(mobs.size)
+        for (mob in mobs) {
             val hint = hintFor(mob)
             val nameWidth = font.width(mob.name)
-            val room = maxHint - nameWidth - 14
+            val room = maxHint - nameWidth - 14 - ARROW_W
             val shown = if (hint.isEmpty() || room < 24) "" else if (font.width(hint) <= room) hint else font.plainSubstrByWidth(hint, room - font.width("...")) + "..."
-            MobRow(mob.id, mob.name, shown, nameWidth)
+            built += MobRow(mob.id, mob.name, shown, nameWidth, null, mob.drops.isNotEmpty())
+            if (mob.id in expanded) {
+                val chosen = config.trackedDrops[mob.id]
+                for (drop in MfTrackCommand.choices(mob)) {
+                    val variants = mob.drops.filter { it.item == drop.item && !it.special }
+                    val odds = when {
+                        drop.special -> "special"
+                        variants.size > 1 -> MfMath.oneIn(variants.minOf { it.chance }) + " - " + MfMath.oneIn(variants.maxOf { it.chance })
+                        else -> MfMath.oneIn(drop.chance)
+                    }
+                    val mark = if (mob.id in config.trackedMobs && (chosen == null || chosen == drop.item)) "§a* " else ""
+                    built += MobRow(mob.id, mark + drop.item, odds, font.width(mark + drop.item), drop.item)
+                }
+            }
         }
+        rows = built
         val on = mobs.count { it.id in config.enabledMobs }
         header = "§f$on §7of §f${mobs.size} §7enabled"
-        footer = "§7Tracked mobs are managed with §e/trackmob§7: §f${config.trackedMobs.size} §7tracked"
+        footer = "§7Click > for a mob's drops, click a drop to track it (§e/trackmob§7): §f${config.trackedMobs.size} §7tracked"
         scroll = scroll.coerceIn(0, maxScroll)
     }
 
@@ -147,12 +164,19 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
         for (i in 0 until rowsVisible) {
             val row = rows.getOrNull(scroll + i) ?: break
             val y = listTop + i * ROW_H
+            val sub = row.drop != null
             val on = row.id in config.enabledMobs
             val hover = !dropdownOpen && mouseX in listLeft until right && mouseY in y until y + ROW_H
             if (hover) graphics.fill(listLeft, y, right, y + ROW_H - 1, PANEL_LIGHT)
+            if (sub) {
+                graphics.text(font, row.name, listLeft + 30, y + 2, WHITE, false)
+                graphics.text(font, row.hint, listLeft + 30 + row.nameWidth + 10, y + 2, DIMMED_TEXT, false)
+                continue
+            }
             drawCheckbox(graphics, listLeft + 2, y + 1, on)
             graphics.text(font, row.name, listLeft + 16, y + 2, if (on) WHITE else TITLE_COLOR, false)
             if (row.hint.isNotEmpty()) graphics.text(font, row.hint, listLeft + 16 + row.nameWidth + 10, y + 2, DIMMED_TEXT, false)
+            if (row.expandable) graphics.text(font, if (row.id in expanded) "v" else ">", right - ARROW_W + 4, y + 2, ACCENT, false)
         }
         val total = rows.size
         if (total > rowsVisible) {
@@ -219,13 +243,38 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
         }
         if (mx in listLeft until listRight - 6 && my in listTop until listBottom) {
             val i = (my - listTop) / ROW_H
-            if (i < rowsVisible) rows.getOrNull(scroll + i)?.let { toggle(it.id); return true }
+            if (i < rowsVisible) rows.getOrNull(scroll + i)?.let { row ->
+                when {
+                    row.drop != null -> toggleDrop(row.id, row.drop)
+                    row.expandable && mx >= listRight - 6 - ARROW_W -> toggleExpanded(row.id)
+                    else -> toggle(row.id)
+                }
+                return true
+            }
         }
         return super.mouseClicked(event, doubleClick)
     }
 
     private fun toggle(id: String) {
         if (!config.enabledMobs.remove(id)) config.enabledMobs.add(id)
+        changed()
+    }
+
+    private fun toggleExpanded(id: String) {
+        if (!expanded.remove(id)) expanded.add(id)
+        version++
+        refresh()
+    }
+
+    /** Clicking a drop follows exactly that drop for the mob; clicking the followed drop again stops tracking the mob. */
+    private fun toggleDrop(id: String, item: String) {
+        if (id in config.trackedMobs && config.trackedDrops[id] == item) {
+            config.trackedMobs.remove(id)
+            config.trackedDrops.remove(id)
+        } else {
+            config.trackedMobs.add(id)
+            config.trackedDrops[id] = item
+        }
         changed()
     }
 
@@ -252,12 +301,15 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
     fun dropdownCenter() = intArrayOf(dropdownX + dropdownWidth / 2, top + 4 + DD_H / 2)
     fun dropdownOptionCenter(index: Int) = intArrayOf(dropdownX + dropdownWidth / 2, top + 4 + DD_H + index * DD_H + DD_H / 2)
     fun checkboxCenter(visibleIndex: Int) = intArrayOf(listLeft + 6, listTop + visibleIndex * ROW_H + 5)
+    fun arrowCenter(visibleIndex: Int) = intArrayOf(listRight - 6 - ARROW_W / 2, listTop + visibleIndex * ROW_H + 5)
+    fun dropRowCenter(visibleIndex: Int) = intArrayOf(listLeft + 40, listTop + visibleIndex * ROW_H + 5)
     fun allOnCenter() = intArrayOf(allOnX + BUTTON_W / 2, buttonY + BUTTON_H / 2)
     fun allOffCenter() = intArrayOf(allOffX + BUTTON_W / 2, buttonY + BUTTON_H / 2)
     val rowCount get() = rows.size
 
     companion object {
         private const val ROW_H = 12
+        private const val ARROW_W = 14
         private const val DD_H = 14
         private const val BUTTON_H = 14
         private const val BUTTON_W = 46
