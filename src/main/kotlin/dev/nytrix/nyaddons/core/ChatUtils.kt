@@ -20,6 +20,12 @@ object ChatUtils {
         }
     }
 
+    /** Like [chat], for a ready-made [message] (hover or click events included). The prefix is added in front. */
+    fun chat(message: Component) {
+        val mc = Minecraft.getInstance()
+        mc.execute { mc.gui.chat.addClientSystemMessage(prefix().append(Component.literal(" ")).append(message)) }
+    }
+
     fun stripColor(text: String): String = if ('§' in text) colorCode.replace(text, "") else text
 
     private fun prefix(): MutableComponent =
