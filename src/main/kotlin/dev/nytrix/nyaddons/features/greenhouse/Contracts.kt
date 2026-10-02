@@ -66,9 +66,9 @@ interface GhPlanner {
 
 /** The single place the window and the readers meet. The real implementations are assigned here. */
 object Greenhouse {
-    var data: GhData = EmptyData
-    var stock: GhStock = EmptyStock
-    var planner: GhPlanner = NoPlanner
+    var data: GhData = GreenhouseDataImpl
+    var stock: GhStock = GreenhouseStockImpl
+    var planner: GhPlanner = GreenhousePlannerImpl
 
     private object EmptyData : GhData {
         override val ready = false

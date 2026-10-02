@@ -8,6 +8,7 @@ import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents
 object GreenhouseStockFeature : Feature {
     override fun init() {
         NyEvents.tick += GreenhouseStockImpl::onTick
+        NyEvents.tick += GreenhouseProgressReader::onTick
         ClientReceiveMessageEvents.GAME.register { message, overlay ->
             if (!overlay) GreenhouseStockImpl.onChat(message)
         }

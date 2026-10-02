@@ -24,7 +24,7 @@ fun nextMilestone(analysedCount: Int): Milestone? {
 
 /** Cheapest to analyse first: coins, then copper, then name. */
 fun uniqueOrder(mutations: List<GhMutation>): List<GhMutation> =
-    mutations.sortedWith(compareBy<GhMutation> { it.analysisCoins }.thenBy { it.analysisCopper }.thenBy { it.name })
+    mutations.filter { it.id !in GreenhouseGoals.skippedMutations }.sortedWith(compareBy<GhMutation> { it.analysisCoins }.thenBy { it.analysisCopper }.thenBy { it.name })
 
 /** 10_000_000 becomes `10M`, 5_000 `5k`, 1_500 `1.5k`. */
 fun formatAmount(value: Long): String {

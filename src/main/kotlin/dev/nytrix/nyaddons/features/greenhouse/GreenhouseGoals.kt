@@ -40,6 +40,9 @@ object GreenhouseGoals {
     const val HELIANTHUS_PER_CONDENSED = 9
     const val CONDENSED_NEEDED = 5
 
+    /** Mutations left out of the checklist: Shellfruit is a secret explosion event and Jerryflower needs quest items. */
+    val skippedMutations = setOf("shellfruit", "jerryflower")
+
     val roseDragonMutations = listOf("Glasscorn", "Devourer", "All-in Aloe", "Phantomleaf", "Timestalk")
 
     /**
@@ -50,7 +53,7 @@ object GreenhouseGoals {
      * Requirements are adjacency counts of crops placed in the greenhouse, so the item needed is one per placed crop.
      */
     fun uniqueOrder(data: GhData, have: (String) -> Int?, analysed: Set<String>): List<GhUniqueEntry> {
-        val remaining = data.mutations.filter { it.id !in analysed }
+        val remaining = data.mutations.filter { it.id !in analysed && it.id !in skippedMutations }
             .sortedWith(compareBy<GhMutation>({ it.analysisCoins }, { it.analysisCopper }, { it.name }))
         val result = ArrayList<GhUniqueEntry>(remaining.size)
         for (mutation in remaining) {

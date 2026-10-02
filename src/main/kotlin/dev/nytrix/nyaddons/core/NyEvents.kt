@@ -1,5 +1,6 @@
 package dev.nytrix.nyaddons.core
 
+import java.util.concurrent.CopyOnWriteArrayList
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext
 
 /**
@@ -8,14 +9,14 @@ import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext
 object NyEvents {
 
     /** Every client tick. */
-    val tick = mutableListOf<() -> Unit>()
+    val tick = CopyOnWriteArrayList<() -> Unit>()
 
     /** Once per second. */
-    val second = mutableListOf<() -> Unit>()
+    val second = CopyOnWriteArrayList<() -> Unit>()
 
     /** Every chat message, with colour codes removed. */
-    val chat = mutableListOf<(String) -> Unit>()
+    val chat = CopyOnWriteArrayList<(String) -> Unit>()
 
     /** Every frame, for drawing beams and text in the world. Wrap the context in a [WorldRenderer] to draw. */
-    val worldRender = mutableListOf<(LevelRenderContext) -> Unit>()
+    val worldRender = CopyOnWriteArrayList<(LevelRenderContext) -> Unit>()
 }

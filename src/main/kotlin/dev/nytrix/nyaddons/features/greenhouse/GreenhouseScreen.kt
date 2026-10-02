@@ -123,9 +123,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             row
         }
         uniqueCostWidth = costWidth
-        val count = order.count { it.id in profile.analysed }
+        val count = profile.analysed.size
         val milestone = nextMilestone(count)
-        headerA = "§fAnalysed §b$count§f/${order.size.coerceAtLeast(40)}   " +
+        headerA = "§fAnalysed §b$count§f/${order.size.coerceAtLeast(38)}   " +
             if (milestone == null) "§aAll DNA milestones reached" else "§7Next milestone §f${milestone.roman} §7at §f${milestone.threshold}§7: §e${milestone.remaining} §7more"
         val nextRow = unique.firstOrNull { it.next }
         headerB = if (nextRow == null) "§7Nothing left to analyse." else "§7Next up: ${nextRow.label}  §8${nextRow.cost}"

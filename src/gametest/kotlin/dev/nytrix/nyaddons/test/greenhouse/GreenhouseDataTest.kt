@@ -60,7 +60,7 @@ class GreenhouseDataTest : FabricClientGameTest {
         // Unique order: sorted, excludes analysed.
         val analysed = setOf("ashwreath", "choconut")
         val order = GreenhouseGoals.uniqueOrder(data, { null }, analysed)
-        check(order.size == 38 && order.none { it.mutation.id in analysed }) { "uniqueOrder size ${order.size}" }
+        check(order.size == 36 && order.none { it.mutation.id in analysed }) { "uniqueOrder size ${order.size}" }
         for (i in 1 until order.size) {
             val a = order[i - 1].mutation
             val b = order[i].mutation

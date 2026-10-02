@@ -103,7 +103,7 @@ object GreenhouseStockImpl : GhStock {
 
     private fun isRelevantSack(title: String): Boolean {
         val sack = sackTitle.find(title.trim())?.groupValues?.get(1) ?: return false
-        return sack.lowercase() in relevantSacks
+        return sack.lowercase().removePrefix("small ").removePrefix("medium ").removePrefix("large ") in relevantSacks
     }
 
     /** Changes whenever the server replaces an item in the menu: each update arrives as a new stack. */

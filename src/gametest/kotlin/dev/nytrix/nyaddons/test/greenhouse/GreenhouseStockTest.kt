@@ -3,6 +3,7 @@ package dev.nytrix.nyaddons.test.greenhouse
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.features.greenhouse.Greenhouse
+import dev.nytrix.nyaddons.features.greenhouse.GreenhouseDataImpl
 import dev.nytrix.nyaddons.features.greenhouse.GreenhouseStockImpl
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
@@ -31,6 +32,24 @@ class GreenhouseStockTest : FabricClientGameTest {
             context.worldBuilder().create().use { world ->
                 context.onClient { Storage.reset() }
                 val sacks = { Storage.profile.greenhouse.sacks }
+
+                // Which mutations are analysed is read from the All Mutations menu anywhere (items as in a real dump).
+                context.onClient {
+                    GreenhouseDataImpl.loadFrom(GreenhouseStockTest::class.java.getResourceAsStream("/greenhouse/data.json")!!.reader())
+                    Storage.profile.greenhouse.analysed.add("cindershade") // ticked by hand, but the game says UNKNOWN
+                }
+                openMenu(context, "(1/2) All Mutations", mapOf(
+                    10 to head("Ashwreath", "Mutation Crop", "", "Size: 1x1", "", "ANALYZED", "", "Click to preview mutation layout!"),
+                    29 to head("Cindershade", "Mutation Crop", "", "Size: 1x1", "", "UNKNOWN", "", "Click to preview mutation layout!"),
+                    33 to head("Do-not-eat-shroom", "Mutation Crop", "", "ANALYZED", ""),
+                    34 to ItemStack(Items.STONE),
+                ))
+                context.waitTicks(40)
+                context.onClient {
+                    val analysed = Storage.profile.greenhouse.analysed
+                    check("ashwreath" in analysed && "cindershade" !in analysed) { "analysed after the menu: $analysed" }
+                    check(analysed.any { it.startsWith("do") }) { "punctuated name was not matched: $analysed" }
+                }
 
                 // Off the Garden nothing is read.
                 openMenu(context, "Mutations Sack", mapOf(10 to head("Phantomleaf", "Stored: 12/1,024")))
@@ -66,11 +85,18 @@ class GreenhouseStockTest : FabricClientGameTest {
                     check(sacks()["timestalk"] == 1234) { "Timestalk: ${sacks()}" }
                     check(sacks().size == 3) { "stone should not be stored: ${sacks()}" }
                 }
+                // The game spells sacks with a size.
+                openMenu(context, "Small Mutations Sack", mapOf(10 to head("Godseed", "Stored: 3/64")))
+                context.waitTicks(20)
+                openMenu(context, "Large Enchanted Agronomy Sack", mapOf(10 to head("Enchanted Wheat", "Stored: 7/20,160")))
+                context.waitTicks(20)
+                context.onClient { check(sacks()["godseed"] == 3 && sacks()["enchanted wheat"] == 7) { "sized sack names: ${sacks()}" } }
+                context.onClient { check(sacks().size == 5) { "sack map: ${sacks()}" } }
                 openMenu(context, "Sack of Sacks", mapOf(10 to head("Wheat", "Stored: 99/100")))
                 context.waitTicks(20)
                 openMenu(context, "Mining Sack", mapOf(10 to head("Cobblestone", "Stored: 99/100")))
                 context.waitTicks(20)
-                context.onClient { check(sacks().size == 3) { "ignored sacks were read: ${sacks()}" } }
+                context.onClient { check(sacks().size == 5) { "ignored sacks were read: ${sacks()}" } }
 
                 // Chat deltas.
                 val hover = Component.literal("§a +5 Phantomleaf §7(Mutations)\n§c -20 Timestalk\n§a +7 Wheat\n -99,999 Helianthus§7 (x)")
