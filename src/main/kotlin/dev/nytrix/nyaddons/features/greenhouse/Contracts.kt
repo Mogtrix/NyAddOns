@@ -62,6 +62,9 @@ class GhLayout(val size: Int, val cells: Array<Array<String?>>, val target: Stri
 interface GhPlanner {
     /** A layout in which [target] spawns by the Greenhouse rules, or null if none can be found. */
     fun plan(target: GhMutation): GhLayout?
+
+    /** Like [plan] but only uses the cells set in [unlocked] (row-major, 100 entries); null allows every cell. */
+    fun plan(target: GhMutation, unlocked: BooleanArray?): GhLayout? = plan(target)
 }
 
 /** The single place the window and the readers meet. The real implementations are assigned here. */

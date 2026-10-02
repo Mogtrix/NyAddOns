@@ -1,12 +1,12 @@
 package dev.nytrix.nyaddons.features.greenhouse
 
 /*
- * Pure helpers for the Greenhouse window, kept in one file with plain data classes. At merge the coordinator may swap
- * [uniqueOrder], [nextMilestone], [formatAmount] and [roseDragonNeeds] for the data layer's GreenhouseGoals.
+ * Pure helpers for the Greenhouse window, kept in one file with plain data classes. The numbers shared with GreenhouseGoals
+ * (milestones, Rose Dragon amounts) are read from there.
  */
 
 /** DNA Analysis milestone thresholds (distinct analysed mutations). */
-val MILESTONE_THRESHOLDS = intArrayOf(1, 10, 15, 20, 30, 40)
+val MILESTONE_THRESHOLDS = IntArray(GreenhouseGoals.tiers.size) { GreenhouseGoals.tiers[it].threshold }
 
 private val ROMAN = arrayOf("I", "II", "III", "IV", "V", "VI")
 
@@ -59,14 +59,15 @@ fun rarityCode(rarity: String): String = when (rarity.lowercase()) {
 
 fun prettify(id: String): String = id.split('_', ' ').filter { it.isNotEmpty() }.joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
 
-/** 0 = nothing known about the ingredients, 1 = at least one is missing, 2 = all are in stock. */
-fun ingredientState(m: GhMutation, data: GhData, stock: GhStock): Int {
+/** 0 = nothing known about the ingredients (or [amount] is 0), 1 = at least one is short for [amount] of them, 2 = all are in stock. */
+fun ingredientState(m: GhMutation, data: GhData, stock: GhStock, amount: Int = 1): Int {
+    if (amount <= 0) return 0
     var known = false
     var missing = false
     for (r in m.requirements) {
         val have = stock.count(data.nameOf(r.crop))
         if (have != null) known = true
-        if (have != null && have <= 0) missing = true
+        if (have != null && have < r.count * amount) missing = true
     }
     return if (missing) 1 else if (known) 2 else 0
 }
@@ -74,8 +75,8 @@ fun ingredientState(m: GhMutation, data: GhData, stock: GhStock): Int {
 /** One line of the Rose Dragon needs list. [need] 0 marks an informational line (no colouring). */
 data class NeedLine(val label: String, val have: Int?, val need: Int, val indent: Int, val heading: Boolean)
 
-const val HELIANTHUS_PER_CONDENSED = 9
-val ROSE_DRAGON_MUTATIONS = listOf("Glasscorn", "Devourer", "All-in Aloe", "Phantomleaf", "Timestalk")
+const val HELIANTHUS_PER_CONDENSED = GreenhouseGoals.HELIANTHUS_PER_CONDENSED
+val ROSE_DRAGON_MUTATIONS get() = GreenhouseGoals.roseDragonMutations
 
 private fun squash(s: String) = s.filter { it.isLetterOrDigit() }.lowercase()
 
@@ -91,8 +92,8 @@ fun requirementLines(m: GhMutation, data: GhData, stock: GhStock, indent: Int): 
     }
 
 fun roseDragonNeeds(data: GhData, stock: GhStock): List<NeedLine> = buildList {
-    add(NeedLine("Condensed Helianthus", stock.count("Condensed Helianthus"), 5, 0, true))
-    add(NeedLine("Helianthus (5 x $HELIANTHUS_PER_CONDENSED)", stock.count("Helianthus"), 5 * HELIANTHUS_PER_CONDENSED, 1, false))
+    add(NeedLine("Condensed Helianthus", stock.count("Condensed Helianthus"), GreenhouseGoals.CONDENSED_NEEDED, 0, true))
+    add(NeedLine("Helianthus (${GreenhouseGoals.CONDENSED_NEEDED} x $HELIANTHUS_PER_CONDENSED)", stock.count("Helianthus"), GreenhouseGoals.CONDENSED_NEEDED * HELIANTHUS_PER_CONDENSED, 1, false))
     for (name in ROSE_DRAGON_MUTATIONS) {
         add(NeedLine(name, stock.count(name), 1, 0, true))
         findMutation(data, name)?.let { addAll(requirementLines(it, data, stock, 1)) }

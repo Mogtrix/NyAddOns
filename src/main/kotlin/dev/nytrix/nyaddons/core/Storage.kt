@@ -44,6 +44,12 @@ class GreenhouseProfile {
     /** Sack contents by lower-case item name, and when a sack menu was last read. */
     var sacks = mutableMapOf<String, Int>()
     var sacksUpdatedAt = 0L
+
+    /** How many of each mutation to make (Unique Mutations view), by mutation id; a missing id means the default of 1. */
+    var amounts = mutableMapOf<String, Int>()
+
+    /** The unlocked Greenhouse squares: 100 characters, row-major, `1` unlocked and `0` locked. Empty means the default block. */
+    var plots = ""
 }
 
 /** What the Magic Find helper has learned for one profile: the extra MF each mob gives on top of the general number. */

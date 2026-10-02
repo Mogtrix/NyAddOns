@@ -7,6 +7,7 @@ import dev.nytrix.nyaddons.features.greenhouse.GhData
 import dev.nytrix.nyaddons.features.greenhouse.GhLayout
 import dev.nytrix.nyaddons.features.greenhouse.GhMutation
 import dev.nytrix.nyaddons.features.greenhouse.GhRequirement
+import dev.nytrix.nyaddons.features.greenhouse.GreenhousePlots
 import dev.nytrix.nyaddons.features.greenhouse.PlannerCore
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
@@ -84,6 +85,20 @@ class GreenhousePlannerTest : FabricClientGameTest {
         loop2@ for (r in 0 until 10) for (c in 0 until 10) if (crowded.cells[r][c] == "lonelily") { crowded.cells[r][(c + 1) % 10] = "wheat"; break@loop2 }
         check(!core.spawns(crowded, "lonelily"), "lonelily next to a crop must not spawn")
         check(core.plan(data.mutation("shellfruit")!!) == null && core.plan(data.mutation("jerryflower")!!) == null, "shellfruit/jerryflower are not plannable")
+        // With only some squares unlocked, a layout may only use those squares, and it must still be a valid one.
+        for ((name, mask) in listOf("default 12" to GreenhousePlots.default(), "30 middle" to GreenhousePlots.fill(30))) {
+            var fitted = 0
+            for (m in data.mutations) {
+                val layout = core.plan(m, mask) ?: continue
+                fitted++
+                for (r in 0 until 10) for (c in 0 until 10) check(layout.cells[r][c] == null || mask[r * 10 + c]) { "${m.id} ($name) uses locked square $r,$c" }
+                check(core.spawns(layout, m.id)) { "${m.id} ($name): masked layout does not spawn it\n${dump(layout)}" }
+            }
+            NyAddOns.logger.info("[Greenhouse] planner with $name unlocked squares: $fitted of 40 fit")
+            check(fitted > 0) { "nothing fits in $name squares" }
+        }
+        check(data.mutations.all { core.plan(it, BooleanArray(100)) == null }) { "nothing can be planned with every square locked" }
+        check(data.mutations.count { core.plan(it, GreenhousePlots.all()) != null } >= planned - 2) { "an all-unlocked mask should plan about as many as no mask" }
         check(planned >= 36, "only $planned of 40 mutations got a layout; null: $nulls")
         check(selfContained.size >= 12, "only ${selfContained.size} self-contained layouts: $selfContained")
     }

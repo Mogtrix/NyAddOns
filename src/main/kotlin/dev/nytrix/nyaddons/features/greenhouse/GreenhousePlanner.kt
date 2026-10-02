@@ -11,7 +11,8 @@ package dev.nytrix.nyaddons.features.greenhouse
  *
  * Established rules (what the planner and `spawns` assume):
  *  1. The grid is 10x10 cells (GRID_SIZE = 10). The player unlocks cells over time (default 12 in the middle, Ethereal Vines
- *     unlock more); the planner assumes all 100 are usable.
+ *     unlock more). Callers pass an `unlocked` mask (row-major, 100 entries) and the planner only uses those cells; null means
+ *     all 100 are usable.
  *  2. A mutation spawns on an EMPTY spot, 1x1 / 2x2 / 3x3 by its `size`. The spot must be fully empty, in bounds, and free of
  *     other plants. Multi-cell plants are one block; in a GhLayout every cell of a block holds the id, and blocks are read
  *     back by scanning row-major (the first uncovered cell of an id is a block's top-left).
@@ -67,8 +68,10 @@ object GreenhousePlannerImpl : GhPlanner {
 
     override fun plan(target: GhMutation): GhLayout? = planDetailed(target)?.layout
 
+    override fun plan(target: GhMutation, unlocked: BooleanArray?): GhLayout? = planDetailed(target, unlocked)?.layout
+
     /** Like [plan] but says which neighbouring mutations must be planted from stock; a self-contained layout is preferred. */
-    fun planDetailed(target: GhMutation): GhPlan? {
+    fun planDetailed(target: GhMutation, unlocked: BooleanArray? = null): GhPlan? {
         val data = Greenhouse.data
         if (!data.ready) return null
         val c = synchronized(this) {
@@ -76,7 +79,7 @@ object GreenhousePlannerImpl : GhPlanner {
             if (known != null && coreMutations === data.mutations) known
             else PlannerCore(data).also { core = it; coreMutations = data.mutations }
         }
-        return c.planDetailed(target)
+        return c.planDetailed(target, unlocked)
     }
 }
 
@@ -238,20 +241,33 @@ class PlannerCore(data: GhData) {
     // ---------------------------------------------------------------- the planner
 
     /** A layout for [target], or null when it is not plannable or none was found within the small search budget. */
-    fun plan(target: GhMutation): GhLayout? = planDetailed(target)?.layout
+    fun plan(target: GhMutation, unlocked: BooleanArray? = null): GhLayout? = planDetailed(target, unlocked)?.layout
 
-    /** The best self-contained layout if one is found, else the smallest stocked one (neighbouring mutations from stock). */
-    fun planDetailed(target: GhMutation): GhPlan? {
+    /**
+     * The best self-contained layout if one is found, else the smallest stocked one (neighbouring mutations from stock).
+     * Only cells set in [unlocked] (row-major, GRID * GRID) are used; null allows every cell.
+     */
+    fun planDetailed(target: GhMutation, unlocked: BooleanArray? = null): GhPlan? {
         val t = index[target.id] ?: return null
         if (!isMut[t] || noTarget[t]) return null
-        if (target.id == GODSEED) return planGodseed(target)?.let { GhPlan(it, emptyList()) }
-        val own = search(t, target.id, true, SELF_BUDGET_NANOS, EXTRA_SUCCESSES)
+        val mask = unlocked?.takeIf { it.size == GRID * GRID }
+        if (target.id == GODSEED) {
+            val layout = planGodseed(target) ?: return null
+            if (mask != null && !usesOnly(layout, mask)) return null
+            return GhPlan(layout, emptyList())
+        }
+        val own = search(t, target.id, true, SELF_BUDGET_NANOS, EXTRA_SUCCESSES, mask)
         if (own != null) return GhPlan(own, emptyList())
-        val stocked = search(t, target.id, false, STOCK_BUDGET_NANOS, 4) ?: return null
+        val stocked = search(t, target.id, false, STOCK_BUDGET_NANOS, 4, mask) ?: return null
         return GhPlan(stocked, stockedIn(stocked, target.id))
     }
 
-    private fun search(t: Int, targetId: String, selfContained: Boolean, budget: Long, extra: Int): GhLayout? {
+    private fun usesOnly(layout: GhLayout, mask: BooleanArray): Boolean {
+        for (r in 0 until GRID) for (c in 0 until GRID) if (layout.cells[r][c] != null && !mask[r * GRID + c]) return false
+        return true
+    }
+
+    private fun search(t: Int, targetId: String, selfContained: Boolean, budget: Long, extra: Int, mask: BooleanArray?): GhLayout? {
         if (selfContained && blocked[t]) return null
         val start = System.nanoTime()
         var best: GhLayout? = null
@@ -262,7 +278,7 @@ class PlannerCore(data: GhData) {
             val elapsed = System.nanoTime() - start
             if (found == 0 && elapsed > budget) break
             if (found > 0 && (found >= extra || elapsed > budget * 2)) break
-            val run = Search(t, attempt, selfContained)
+            val run = Search(t, attempt, selfContained, mask)
             if (run.run()) {
                 val layout = run.toLayout(targetId)
                 if (if (selfContained) spawnsSelfContained(layout, targetId) else spawns(layout, targetId)) {
@@ -295,7 +311,7 @@ class PlannerCore(data: GhData) {
     }
 
     /** One greedy attempt: place the target, then satisfy every placed mutation's ring, nearest first. */
-    private inner class Search(val target: Int, val attempt: Int, val selfContained: Boolean) {
+    private inner class Search(val target: Int, val attempt: Int, val selfContained: Boolean, val mask: BooleanArray?) {
         val rnd = Rng(attempt + 1)
         val grid = IntArray(GRID * GRID) { -1 }
         val eId = IntArray(MAX_ENTITIES)
@@ -325,7 +341,10 @@ class PlannerCore(data: GhData) {
 
         fun fits(r: Int, c: Int, s: Int): Boolean {
             if (r < 0 || c < 0 || r + s > GRID || c + s > GRID) return false
-            for (dr in 0 until s) for (dc in 0 until s) if (grid[(r + dr) * GRID + c + dc] >= 0) return false
+            for (dr in 0 until s) for (dc in 0 until s) {
+                val i = (r + dr) * GRID + c + dc
+                if (grid[i] >= 0 || (mask != null && !mask[i])) return false
+            }
             return true
         }
 
@@ -401,7 +420,22 @@ class PlannerCore(data: GhData) {
             val ts = size[target]
             val tr: Int
             val tc: Int
-            if (attempt == 0) { tr = (GRID - ts) / 2; tc = (GRID - ts) / 2 }
+            if (mask != null) {
+                // Only spots where the target fits in the unlocked cells: the one nearest the middle first, then random ones.
+                var pick = -1
+                var picks = 0
+                var bestDist = Float.MAX_VALUE
+                for (r in 0..GRID - ts) for (c in 0..GRID - ts) {
+                    if (!fits(r, c, ts)) continue
+                    picks++
+                    val dist = kotlin.math.abs(r + ts / 2f - 4.5f) + kotlin.math.abs(c + ts / 2f - 4.5f)
+                    if (attempt == 0) { if (dist < bestDist) { bestDist = dist; pick = r * GRID + c } }
+                    else if (rnd.next(picks) == 0) pick = r * GRID + c // reservoir sample
+                }
+                if (pick < 0) return false
+                tr = pick / GRID
+                tc = pick % GRID
+            } else if (attempt == 0) { tr = (GRID - ts) / 2; tc = (GRID - ts) / 2 }
             else { tr = rnd.next(GRID - ts + 1); tc = rnd.next(GRID - ts + 1) }
             val root = put(target, tr, tc)
             if (root < 0 || !feasible(root)) return false

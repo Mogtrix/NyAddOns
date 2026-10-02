@@ -99,14 +99,10 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
         categoryNames = Array(list.size) { list[it].name }
         category = category.coerceIn(0, (list.size - 1).coerceAtLeast(0))
         val mobs = list.getOrNull(category)?.mobs ?: emptyList()
-        val maxHint = listRight - listLeft - 40
         val built = ArrayList<MobRow>(mobs.size)
         for (mob in mobs) {
-            val hint = hintFor(mob)
             val nameWidth = font.width(mob.name)
-            val room = maxHint - nameWidth - 14 - ARROW_W
-            val shown = if (hint.isEmpty() || room < 24) "" else if (font.width(hint) <= room) hint else font.plainSubstrByWidth(hint, room - font.width("...")) + "..."
-            built += MobRow(mob.id, mob.name, shown, nameWidth, null, mob.drops.isNotEmpty())
+            built += MobRow(mob.id, mob.name, "", nameWidth, null, mob.drops.isNotEmpty())
             if (mob.id in expanded) {
                 val chosen = config.trackedDrops[mob.id]
                 for (drop in MfTrackCommand.choices(mob)) {
@@ -126,11 +122,6 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
         header = "§f$on §7of §f${mobs.size} §7enabled"
         footer = "§7Click > for a mob's drops, click a drop to track it (§e/trackmob§7): §f${config.trackedMobs.size} §7tracked"
         scroll = scroll.coerceIn(0, maxScroll)
-    }
-
-    private fun hintFor(mob: MfMob): String {
-        val best = mob.drops.filter { !it.special && it.chance > 0 }.minByOrNull { it.chance } ?: return ""
-        return "1 in ${"%,d".format(Math.round(1.0 / best.chance))}  ${best.item}"
     }
 
     // Drawing
