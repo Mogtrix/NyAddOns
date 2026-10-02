@@ -110,7 +110,8 @@ beams and floating text) and `gui/` (overlays and the position editor).
 
 MIT, see `LICENSE`. The config screen is [MoulConfig](https://github.com/NotEnoughUpdates/MoulConfig)
 (LGPL-3.0), bundled under a relocated package; its licence is included in the jar as
-`LICENSE_MoulConfig`. The textures in `assets/nyaddons/moulconfig` are recoloured copies of
+`LICENSE_MoulConfig`. The Greenhouse crop and mutation data is downloaded from
+[SkyShards-Greenhouse](https://github.com/Campionnn/SkyShards-Greenhouse) (MIT, see `LICENSE_SkyShardsGreenhouse` in the jar). The textures in `assets/nyaddons/moulconfig` are recoloured copies of
 MoulConfig's, and `gui/ConfigTheme.kt` swaps its panel colours for a neutral grey and blue palette.
 
 Not affiliated with Hypixel or SkyHanni. Mods are used on Hypixel at your own risk.
