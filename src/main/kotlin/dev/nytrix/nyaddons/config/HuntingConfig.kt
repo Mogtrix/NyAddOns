@@ -23,6 +23,51 @@ class HuntingConfig {
     @Accordion
     @JvmField
     var fusionTracker = FusionTrackerConfig()
+
+    @Expose
+    @ConfigOption(name = "Fusion Tree", desc = "")
+    @Accordion
+    @JvmField
+    var fusionTree = FusionTreeConfig()
+}
+
+enum class FusionTreeStyle(private val displayName: String) {
+    TREE("Tree"),
+    LIST("To-do list"),
+    DIAGRAM("Diagram"),
+    ;
+
+    override fun toString() = displayName
+}
+
+class FusionTreeConfig {
+
+    @Expose
+    @ConfigOption(name = "Enabled", desc = "Show the fusion tree of your tracked shards beside the Fusion Box, Shard Fusion and Confirm Fusion menus.")
+    @ConfigEditorBoolean
+    @JvmField
+    var enabled = true
+
+    @Expose
+    @ConfigOption(name = "Style", desc = "An indented tree, a to-do list in the order you fuse, or a diagram with icons.")
+    @ConfigEditorDropdown
+    @JvmField
+    var style = FusionTreeStyle.TREE
+
+    @Expose
+    @ConfigOption(name = "Highlight Slots", desc = "Outline the two shards of the next fusion you can do in the fusion menus.")
+    @ConfigEditorBoolean
+    @JvmField
+    var highlightSlots = true
+
+    @Expose
+    @JvmField
+    var position = Position(0, 0, 1f)
+
+    /** False until the tree has been given its default place beside the menu. */
+    @Expose
+    @JvmField
+    var positioned = false
 }
 
 enum class KuudraTier(private val displayName: String, val id: String) {

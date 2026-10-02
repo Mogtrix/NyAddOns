@@ -88,13 +88,24 @@ data class FusionParams(
 )
 
 /**
+ * One shard in a fusion tree.
+ *
+ * @param shard the shard's code, like `R34`
+ * @param quantity how many of it this step calls for
+ * @param crafts how many fusions make that quantity; zero for a shard that is hunted
+ * @param fuseAmount how many of it one fusion uses up when it is an ingredient
+ * @param inputs the ingredients; empty for a shard that is hunted
+ */
+class FusionNode(val shard: String, val quantity: Double, val crafts: Long, val fuseAmount: Int, val inputs: List<FusionNode>)
+
+/**
  * What it takes to make some quantity of one shard.
  *
  * @param crafts how many fusions in total
  * @param materials how many of each shard has to be hunted, by shard code
  * @param direct true when hunting the shard itself is quicker than any fusion
  */
-class FusionPlan(val crafts: Long, val materials: Map<String, Double>, val direct: Boolean)
+class FusionPlan(val crafts: Long, val materials: Map<String, Double>, val direct: Boolean, val root: FusionNode)
 
 class FusionCalculator(private val data: FusionData, private val params: FusionParams) {
 
@@ -132,7 +143,16 @@ class FusionCalculator(private val data: FusionData, private val params: FusionP
         assign(tree, quantity, crocodileMultiplier)
         val materials = LinkedHashMap<Int, Double>()
         val crafts = collect(tree, materials)
-        return FusionPlan(crafts.roundToLong(), materials.mapKeys { data.ids[it.key] }, tree is Tree.Direct)
+        return FusionPlan(crafts.roundToLong(), materials.mapKeys { data.ids[it.key] }, tree is Tree.Direct, nodeOf(tree))
+    }
+
+    private fun nodeOf(tree: Tree): FusionNode {
+        val (crafts, inputs) = when (tree) {
+            is Tree.Direct -> 0.0 to emptyList()
+            is Tree.Fused -> tree.crafts to listOf(tree.input1, tree.input2)
+            is Tree.Cycle -> tree.crafts to tree.cycleInputs + tree.inputRecipe
+        }
+        return FusionNode(data.ids[tree.shard], tree.quantity, crafts.roundToLong(), data.fuseAmount[tree.shard], inputs.map(::nodeOf))
     }
 
     // Hunting rates

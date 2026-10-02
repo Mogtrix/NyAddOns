@@ -47,13 +47,15 @@ object FusionRepo {
  */
 object FusionTracker : Feature {
 
-    private class Target(val shard: Shard, val quantity: Int, val plan: FusionPlan)
+    class Target(val shard: Shard, val quantity: Int, val plan: FusionPlan)
 
     private val config get() = NyAddOns.config.hunting.fusionTracker
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "NyAddOns fusion calculator").apply { isDaemon = true } }
 
+    /** The tracked shards that still need levelling, each with its worked-out fusion tree. */
     @Volatile
-    private var targets: List<Target> = emptyList()
+    var targets: List<Target> = emptyList()
+        private set
 
     @Volatile
     private var busy = false

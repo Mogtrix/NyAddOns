@@ -38,6 +38,13 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
 - Shards already in your box are only counted for the materials you hunt, not for
   in-between fusion results.
 
+**Fusion Tree** (Hunting)
+- Inside the Fusion Box, Shard Fusion and Confirm Fusion menus, shows how to fuse each tracked
+  shard: every step with have/need, finished steps greyed out, and the step you can do now in green.
+- Three styles to choose from: an indented tree, a to-do list in fusing order, or a diagram with icons.
+- Outlines the two shards of the next fusion in the menu.
+- Fusing subtracts the two ingredients shown on the Confirm Fusion screen from the counts.
+
 ## Commands
 
 | Command | What it does |

@@ -4,6 +4,7 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder
 import dev.nytrix.nyaddons.features.foraging.HoneycombTreeTimer
 import dev.nytrix.nyaddons.features.foraging.HoneyhiveTimer
 import dev.nytrix.nyaddons.features.hunting.FusionTracker
+import dev.nytrix.nyaddons.features.hunting.FusionTree
 import dev.nytrix.nyaddons.features.hunting.ShardTracker
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
 
@@ -31,5 +32,6 @@ object Features {
         HoneyhiveTimer,
         ShardTracker,
         FusionTracker,
+        FusionTree,
     )
 }

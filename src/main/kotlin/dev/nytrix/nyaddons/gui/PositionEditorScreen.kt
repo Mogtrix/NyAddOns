@@ -16,17 +16,16 @@ class PositionEditorScreen : Screen(Component.literal("NyAddOns Position Editor"
     private var grabX = 0
     private var grabY = 0
 
-    private class Box(val overlay: Overlay, val lines: List<String>, val width: Int, val height: Int) {
+    private class Box(val overlay: Overlay, val content: OverlayContent, val width: Int, val height: Int) {
         val position get() = overlay.position()
         fun contains(x: Double, y: Double) =
             x >= position.x && x < position.x + width && y >= position.y && y < position.y + height
     }
 
     private fun boxes() = OverlayManager.overlays.map { overlay ->
-        val lines = overlay.lines().ifEmpty { overlay.example }
-        val (width, height) = OverlayManager.sizeOf(lines)
+        val content = overlay.content() ?: overlay.example()
         val scale = OverlayManager.scaleOf(overlay.position())
-        Box(overlay, lines, (width * scale).roundToInt(), (height * scale).roundToInt())
+        Box(overlay, content, (content.width * scale).roundToInt(), (content.height * scale).roundToInt())
     }
 
     private fun boxAt(x: Double, y: Double) = boxes().lastOrNull { it.contains(x, y) }
@@ -48,7 +47,7 @@ class PositionEditorScreen : Screen(Component.literal("NyAddOns Position Editor"
             position.y = position.y.coerceIn(0, (height - box.height).coerceAtLeast(0))
             val color = if (box.overlay === hovered) BOX_HOVERED else BOX
             graphics.fill(position.x, position.y, position.x + box.width, position.y + box.height, color)
-            OverlayManager.draw(graphics, position, box.lines)
+            OverlayManager.draw(graphics, position, box.content)
         }
 
         if (hovered != null && dragging == null) {

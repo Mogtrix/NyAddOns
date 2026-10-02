@@ -1,22 +1,12 @@
 package dev.nytrix.nyaddons.features.hunting
 
-import com.google.common.collect.ImmutableMultimap
-import com.mojang.authlib.GameProfile
-import com.mojang.authlib.properties.Property
-import com.mojang.authlib.properties.PropertyMap
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.gui.ConfigTheme
-import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
-import net.minecraft.core.component.DataComponents
 import net.minecraft.network.chat.Component
-import net.minecraft.world.item.ItemStack
-import net.minecraft.world.item.Items
-import net.minecraft.world.item.component.ResolvableProfile
-import java.util.UUID
 
 /**
  * A chest-shaped grid of every shard, laid out like the Hunting Box. Clicking a shard tracks or
@@ -88,12 +78,12 @@ class ShardPickerScreen : Screen(Component.literal("Shard Picker")) {
             graphics.fill(x, y, x + SLOT - 1, y + SLOT - 1, if (tracked) ACCENT else SLOT_BORDER)
             graphics.fill(x + 1, y + 1, x + SLOT - 2, y + SLOT - 2, SLOT_BACKGROUND)
             if (shard == null) continue
-            graphics.item(iconOf(shard), x, y)
+            graphics.item(ShardIcons.of(shard), x, y)
             val owned = ShardTracker.progress(shard).owned ?: 0
             if (owned == 0) {
                 graphics.fill(x + 1, y + 1, x + SLOT - 2, y + SLOT - 2, DIMMED)
             } else {
-                graphics.itemDecorations(font, iconOf(shard), x, y, if (owned > 999) "${owned / 1000}k" else owned.toString())
+                graphics.itemDecorations(font, ShardIcons.of(shard), x, y, if (owned > 999) "${owned / 1000}k" else owned.toString())
             }
         }
 
@@ -159,8 +149,6 @@ class ShardPickerScreen : Screen(Component.literal("Shard Picker")) {
         private const val DIMMED = 0xB0141414.toInt()
         private const val ACCENT = 0xFF000000.toInt() or ConfigTheme.ACCENT
 
-        private val icons = HashMap<String, ItemStack>()
-
         fun open() {
             NyAddOns.openScreen { ShardPickerScreen() }
         }
@@ -170,19 +158,6 @@ class ShardPickerScreen : Screen(Component.literal("Shard Picker")) {
             graphics.fill(x, y, x + width, y + height, PANEL_LIGHT)
             graphics.fill(x + 1, y + 1, x + width, y + height, PANEL_DARK)
             graphics.fill(x + 1, y + 1, x + width - 1, y + height - 1, PANEL)
-        }
-
-        /** The shard's own head when its skin is known, a plain shard otherwise. */
-        private fun iconOf(shard: Shard): ItemStack = icons.getOrPut(shard.id + (shard.texture != null)) {
-            val texture = shard.texture ?: return@getOrPut ItemStack(Items.PRISMARINE_SHARD)
-            try {
-                val properties = PropertyMap(ImmutableMultimap.of("textures", Property("textures", texture)))
-                val profile = GameProfile(UUID.nameUUIDFromBytes(shard.id.toByteArray()), "", properties)
-                ItemStack(Items.PLAYER_HEAD).apply { set(DataComponents.PROFILE, ResolvableProfile.createResolved(profile)) }
-            } catch (e: Exception) {
-                Minecraft.getInstance().execute { NyAddOns.logger.warn("Could not build the icon for ${shard.name}", e) }
-                ItemStack(Items.PRISMARINE_SHARD)
-            }
         }
     }
 }

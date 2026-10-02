@@ -54,11 +54,20 @@ object ShardTracker : Feature {
         Regex("You caught(?: an?)?(?: x(?<amount>\\d+))? (?<name>.+?) Shards?!"),
         Regex("LOOT SHARE!? You received (?:an?|(?<amount>\\d+)x?) (?<name>.+?) Shards? (?:for assisting|from) "),
         Regex("CHARM! You charmed .+ and received (?<amount>\\d+) (?<name>.+?) Shards?!"),
-        Regex("FUSION! You obtained(?: an?)? (?<name>.+?) Shard(?: x(?<amount>\\d+))?!"),
         Regex("You sent (?:an?|(?<amount>\\d+)) (?<name>.+?) Shards? to your Hunting Box"),
         Regex("FLOOR DROP! You found (?<name>.+?) Shard on the ground!"),
         Regex("SHARD! Your contribution earned you the (?<name>.+?) Shard!"),
     )
+
+    private val fusionMessage = Regex("FUSION! You obtained(?: an?)? (?<name>.+?) Shard(?: x(?<amount>\\d+))?!")
+    private const val DOUBLE_FUSION_MESSAGE = "You received double shards from the fusion"
+
+    private val fusionBoxTitle = Regex("^(?:\\(\\d+/\\d+\\) )?Fusion Box$")
+    private const val SHARD_FUSION_TITLE = "Shard Fusion"
+    private const val CONFIRM_FUSION_TITLE = "Confirm Fusion"
+    private val requiredToFuseLine = Regex("Required to fuse: (\\d+)")
+    private const val FIRST_INGREDIENT_SLOT = 12
+    private const val SECOND_INGREDIENT_SLOT = 14
 
     private const val READ_INTERVAL_TICKS = 4
     private const val CHEST_COLUMNS = 9
@@ -72,6 +81,11 @@ object ShardTracker : Feature {
     private val shardsSeen = HashSet<String>()
     private var searching = false
     private var ticks = 0
+
+    // The two ingredients last seen in the Confirm Fusion screen, and what the last fusion produced.
+    // Chat only names the result, so the ingredients are taken from here when it arrives.
+    private var fusionIngredients: List<Pair<Shard, Int>> = emptyList()
+    private var lastFusionResult: Pair<Shard, Int>? = null
 
     override fun init() {
         ShardRepo.load(NyAddOns.directory)
@@ -180,6 +194,12 @@ object ShardTracker : Feature {
                 readAttributeMenu(screen)
             }
 
+            title == CONFIRM_FUSION_TITLE -> {
+                endBoxVisit()
+                val items = menuItems(screen).associate { it.index to it.value }
+                readConfirmFusion(items[FIRST_INGREDIENT_SLOT], items[SECOND_INGREDIENT_SLOT])
+            }
+
             else -> endBoxVisit()
         }
     }
@@ -259,7 +279,30 @@ object ShardTracker : Feature {
         return changed
     }
 
-    private fun shardOf(stack: ItemStack): Shard? =
+    /** True in the two fusion screens that list shards to pick from. */
+    fun isFusionPicker(title: String) = fusionBoxTitle.containsMatchIn(title) || title == SHARD_FUSION_TITLE
+
+    /** True in any of the three fusion screens. */
+    fun isFusionMenu(title: String) = isFusionPicker(title) || title == CONFIRM_FUSION_TITLE
+
+    /** Remembers the two shards about to be fused, so they can be taken off the counts when the fusion happens. */
+    fun readConfirmFusion(first: ItemStack?, second: ItemStack?) {
+        fusionIngredients = listOf(ingredientOf(first ?: return) ?: return, ingredientOf(second ?: return) ?: return)
+    }
+
+    private fun ingredientOf(stack: ItemStack): Pair<Shard, Int>? {
+        val lore = loreOf(stack)
+        // This screen names the shard in the lore, not always in the item name.
+        val shard = shardOf(stack)
+            ?: (lore + nameOf(stack)).firstNotNullOfOrNull { ShardRepo.byName(it.removeSuffix(" Shard")) }
+            ?: return null
+        val amount = lore.firstNotNullOfOrNull { requiredToFuseLine.find(it) }?.groupValues?.get(1)?.toIntOrNull()
+            ?: FusionRepo.data?.let { data -> data.indexOf[shard.code]?.let { data.fuseAmount[it] } }
+            ?: return null
+        return shard to amount
+    }
+
+    fun shardOf(stack: ItemStack): Shard? =
         ShardRepo.byName(nameOf(stack))
             ?: loreOf(stack).firstNotNullOfOrNull { sourceLine.find(it) }?.let { ShardRepo.byCode(it.groupValues[1]) }
 
@@ -292,15 +335,31 @@ object ShardTracker : Feature {
             spend(shard, match.groupValues[1].toInt(), ShardRepo.totalToMax(shard))
             return
         }
+        fusionMessage.find(message)?.let { match ->
+            val shard = ShardRepo.byName(match.groups["name"]!!.value) ?: return
+            val amount = match.groups["amount"]?.value?.toIntOrNull() ?: 1
+            addToBox(shard, amount)
+            for ((ingredient, used) in fusionIngredients) addToBox(ingredient, -used)
+            lastFusionResult = shard to amount
+            return
+        }
+        if (DOUBLE_FUSION_MESSAGE in message) {
+            lastFusionResult?.let { (shard, amount) -> addToBox(shard, amount) }
+            return
+        }
         for (pattern in gainMessages) {
             val match = pattern.find(message) ?: continue
             val shard = ShardRepo.byName(match.groups["name"]?.value ?: continue) ?: continue
-            val progress = progress(shard)
-            // Without a starting count from the Hunting Box there is nothing to add to.
-            progress.owned = (progress.owned ?: return) + (match.groups["amount"]?.value?.toIntOrNull() ?: 1)
-            Storage.markDirty()
+            addToBox(shard, match.groups["amount"]?.value?.toIntOrNull() ?: 1)
             return
         }
+    }
+
+    private fun addToBox(shard: Shard, amount: Int) {
+        val progress = progress(shard)
+        // Without a starting count from the Hunting Box there is nothing to add to.
+        progress.owned = ((progress.owned ?: return) + amount).coerceAtLeast(0)
+        Storage.markDirty()
     }
 
     private fun spend(shard: Shard, amount: Int, syphoned: Int) {

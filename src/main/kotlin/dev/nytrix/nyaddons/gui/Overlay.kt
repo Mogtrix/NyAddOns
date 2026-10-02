@@ -9,25 +9,55 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.resources.Identifier
 
+/** Something an overlay can show. Drawn with its top-left corner at 0,0; the overlay places and scales it. */
+interface OverlayContent {
+    val width: Int
+    val height: Int
+    fun draw(graphics: GuiGraphicsExtractor)
+}
+
+/** Plain shadowed text lines, the way SkyHanni draws its displays. */
+class TextContent(private val lines: List<String>) : OverlayContent {
+    private val font get() = Minecraft.getInstance().font
+
+    override val width get() = (lines.maxOfOrNull { font.width(it) } ?: 0) + 2
+    override val height get() = lines.size * LINE_HEIGHT + 1
+
+    override fun draw(graphics: GuiGraphicsExtractor) {
+        lines.forEachIndexed { index, line ->
+            graphics.text(font, "§f$line", 1, 1 + index * LINE_HEIGHT, WHITE, true)
+        }
+    }
+
+    private companion object {
+        const val LINE_HEIGHT = 10
+        const val WHITE = -1
+    }
+}
+
 /**
- * A block of text lines on the HUD that the player can move and resize in the position editor.
+ * Something on screen that the player can move and resize in the position editor.
  *
  * @param label name shown in the position editor
  * @param position where it is stored in the config
- * @param example lines shown in the position editor when there is nothing to display
- * @param lines the lines to draw right now; return an empty list to hide the overlay
+ * @param example shown in the position editor when there is nothing to display
+ * @param content what to draw right now, or null to hide the overlay
+ * @param onHud false for overlays that a feature draws itself, for example only inside a menu
  */
 class Overlay(
     val label: String,
     val position: () -> Position,
-    val example: List<String>,
-    val lines: () -> List<String>,
-)
+    val example: () -> OverlayContent,
+    val content: () -> OverlayContent?,
+    val onHud: Boolean = true,
+) {
+    /** A text overlay: [lines] returns the lines to draw, or an empty list to hide it. */
+    constructor(label: String, position: () -> Position, example: List<String>, lines: () -> List<String>) : this(
+        label, position, { TextContent(example) }, { lines().takeIf { it.isNotEmpty() }?.let(::TextContent) },
+    )
+}
 
 object OverlayManager {
-
-    private const val LINE_HEIGHT = 10
-    private const val WHITE = -1
 
     val overlays = mutableListOf<Overlay>()
 
@@ -46,29 +76,19 @@ object OverlayManager {
         val mc = Minecraft.getInstance()
         if (!SkyBlockData.onSkyBlock || mc.options.hideGui || mc.screen is PositionEditorScreen) return
         for (overlay in overlays) {
-            val lines = overlay.lines()
-            if (lines.isNotEmpty()) draw(graphics, overlay.position(), lines)
+            if (overlay.onHud) overlay.content()?.let { draw(graphics, overlay.position(), it) }
         }
     }
 
     fun scaleOf(position: Position) = position.scale * NyAddOns.config.gui.globalScale
 
-    /** Unscaled width and height of a block of lines. */
-    fun sizeOf(lines: List<String>): Pair<Int, Int> {
-        val font = Minecraft.getInstance().font
-        return (lines.maxOfOrNull { font.width(it) } ?: 0) + 2 to lines.size * LINE_HEIGHT + 1
-    }
-
-    fun draw(graphics: GuiGraphicsExtractor, position: Position, lines: List<String>) {
-        val font = Minecraft.getInstance().font
+    fun draw(graphics: GuiGraphicsExtractor, position: Position, content: OverlayContent) {
         val scale = scaleOf(position)
         val pose = graphics.pose()
         pose.pushMatrix()
         pose.translate(position.x.toFloat(), position.y.toFloat())
         pose.scale(scale, scale)
-        lines.forEachIndexed { index, line ->
-            graphics.text(font, "§f$line", 1, 1 + index * LINE_HEIGHT, WHITE, true)
-        }
+        content.draw(graphics)
         pose.popMatrix()
     }
 }

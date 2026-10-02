@@ -10,13 +10,20 @@ import dev.nytrix.nyaddons.features.hunting.FusionCalculator
 import dev.nytrix.nyaddons.features.hunting.FusionData
 import dev.nytrix.nyaddons.features.hunting.FusionParams
 import dev.nytrix.nyaddons.features.hunting.FusionRepo
+import dev.nytrix.nyaddons.config.FusionTreeStyle
 import dev.nytrix.nyaddons.features.hunting.FusionTracker
+import dev.nytrix.nyaddons.features.hunting.FusionTree
 import dev.nytrix.nyaddons.features.hunting.ShardPickerScreen
 import dev.nytrix.nyaddons.features.hunting.ShardRepo
 import dev.nytrix.nyaddons.features.hunting.ShardTracker
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestServerContext
 import net.minecraft.client.gui.screens.inventory.ContainerScreen
+import net.minecraft.core.component.DataComponents
+import net.minecraft.network.chat.Component
+import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.Items
+import net.minecraft.world.item.component.ItemLore
 import net.minecraft.client.Minecraft
 import java.util.zip.GZIPInputStream
 import kotlin.math.abs
@@ -301,6 +308,76 @@ class NyAddOnsGameTest : FabricClientGameTest {
         context.waitTicks(30)
         context.waitFor({ FusionTracker.upToDate }, 600)
         context.takeScreenshot("g-fusion-materials")
+
+        // The fusion tree beside a stand-in Fusion Box, with enough of both ingredients for one fusion.
+        context.onClient {
+            NyEvents.chat.forEach { it("You caught x10 Flitter Shards!") }
+            NyEvents.chat.forEach { it("You caught x7 Salmon Shards!") }
+        }
+        server.runCommand("execute at @p run setblock ~ ~ ~2 minecraft:air")
+        server.runCommand(
+            "execute at @p run setblock ~ ~ ~2 minecraft:chest{CustomName:\"Fusion Box\",Items:[" +
+                item(10, "Flitter", "Owned: 10 Shards") + "," + item(12, "Salmon", "Owned: 7 Shards") + "," +
+                item(14, "Grove", "Owned: 20 Shards") + "]}",
+        )
+        context.waitTicks(10)
+        context.input.pressKey { it.keyUse }
+        context.waitForScreen(ContainerScreen::class.java)
+        context.waitTicks(30)
+        context.waitFor({ FusionTracker.upToDate }, 600)
+        context.onClient {
+            val next = FusionTree.nextIngredients().map { it.name }.toSet()
+            check(next == setOf("Flitter", "Salmon")) { "next fusion uses $next, expected Flitter and Salmon" }
+        }
+        for (style in FusionTreeStyle.entries) {
+            context.onClient { NyAddOns.config.hunting.fusionTree.style = style }
+            context.waitTicks(3)
+            context.takeScreenshot("h-fusion-tree-${style.name.lowercase()}")
+        }
+        context.onClient { NyAddOns.config.hunting.fusionTree.style = FusionTreeStyle.TREE }
+        context.setScreen { null }
+
+        // The same in a window the size people play in, where the tree fits beside the menu.
+        context.input.resizeWindow(1280, 720)
+        context.onClient {
+            it.options.guiScale().set(2)
+            it.resizeGui()
+            NyAddOns.config.hunting.fusionTree.positioned = false
+        }
+        context.waitTicks(5)
+        context.input.pressKey { it.keyUse }
+        context.waitForScreen(ContainerScreen::class.java)
+        context.waitTicks(10)
+        for (style in FusionTreeStyle.entries) {
+            context.onClient { NyAddOns.config.hunting.fusionTree.style = style }
+            context.waitTicks(3)
+            context.takeScreenshot("i-fusion-tree-wide-${style.name.lowercase()}")
+        }
+        context.onClient { NyAddOns.config.hunting.fusionTree.style = FusionTreeStyle.TREE }
+        context.setScreen { null }
+        context.input.resizeWindow(854, 480)
+        context.onClient {
+            it.options.guiScale().set(0)
+            it.resizeGui()
+            NyAddOns.config.hunting.fusionTree.positioned = false
+        }
+        context.waitTicks(5)
+
+        // Fusing takes the two ingredients shown on the Confirm Fusion screen off the counts.
+        context.onClient {
+            fun stack(name: String, vararg lore: String) = ItemStack(Items.PLAYER_HEAD).apply {
+                set(DataComponents.CUSTOM_NAME, Component.literal(name))
+                set(DataComponents.LORE, ItemLore(lore.map { Component.literal(it) }))
+            }
+            val flitter = ShardRepo.byName("Flitter")!!
+            val salmon = ShardRepo.byName("Salmon")!!
+            ShardTracker.readConfirmFusion(stack("Flitter", "Required to fuse: 5"), stack("Fusion Ingredient", "Salmon Shard", "Required to fuse: 5"))
+            NyEvents.chat.forEach { it("FUSION! You obtained Grove Shard x2!") }
+            val counts = listOf(flitter, salmon, grove).map { ShardTracker.progress(it).owned }
+            check(counts == listOf(5, 2, 22)) { "after a fusion the counts are $counts, expected [5, 2, 22]" }
+            NyEvents.chat.forEach { it("PURE REPTILE You received double shards from the fusion!") }
+            check(ShardTracker.progress(grove).owned == 24) { "the doubled fusion was not counted" }
+        }
 
         // The picker.
         context.onClient { it.connection!!.sendCommand("hunt") }
