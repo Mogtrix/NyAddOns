@@ -63,8 +63,8 @@ fun interface MfKills {
 
 /** The single place the parts meet. The real implementations are assigned here at merge. */
 object MagicFind {
-    var data: MfData = EmptyData
-    var stats: MfStats = EmptyStats
+    var data: MfData = MagicFindDataImpl
+    var stats: MfStats = MagicFindStatsImpl
     var kills: MfKills = MfKills { null }
 
     private object EmptyData : MfData {

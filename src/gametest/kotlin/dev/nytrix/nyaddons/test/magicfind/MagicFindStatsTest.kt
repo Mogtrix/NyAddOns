@@ -29,6 +29,7 @@ class MagicFindStatsTest : FabricClientGameTest {
 
     override fun runTest(context: ClientGameTestContext) {
         val stats = MagicFindStatsImpl
+        val oldKills = MagicFind.kills
         MagicFind.stats = stats
         System.setProperty("nyaddons.devArea", "Hub")
         try {
@@ -149,7 +150,7 @@ class MagicFindStatsTest : FabricClientGameTest {
             }
         } finally {
             System.clearProperty("nyaddons.devArea")
-            MagicFind.kills = MfKills { null }
+            MagicFind.kills = oldKills
         }
     }
 

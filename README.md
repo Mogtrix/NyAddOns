@@ -58,6 +58,17 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
   It reads what is on screen and sends nothing anywhere; it is how menus no mod documents get
   described when something does not line up.
 
+### Magic Find (Combat)
+- After you kill a mob that has a rare drop (base chance under 5%), a chat line shows the Magic Find
+  that applies to it. General Magic Find is read once from the tab list Stats widget and cached; only the
+  mob-specific part is added at kill time, learned from `RARE DROP!` lines. Kills in a few seconds are
+  batched, with `xN` for repeats. A setting picks no breakdown, hover breakdown or inline breakdown.
+- `/mf` opens a menu: pick a Bestiary category from the dropdown and tick the mobs you want. Everything
+  is off except King Minos, Minos Inquisitors and the highest tier of each slayer boss.
+- `/trackmob <mob>` also prints each rare drop's base odds, then the odds with your Magic Find
+  (and Looting, where it applies). Tracking many mobs can spam chat.
+- Kills are detected from name tags and your hits, so ranged or indirect kills can be missed.
+
 ## Commands
 
 | Command | What it does |
@@ -68,6 +79,8 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric), styled after SkyHan
 | `/hunt` or `/ny hunt` | Open the shard picker |
 | `/hunt <shard>` | Track or untrack a shard |
 | `/hunt clear` | Stop tracking all shards |
+| `/mf` or `/ny mf` | Choose which mobs show Magic Find |
+| `/trackmob <mob>` | Track a mob's rare drop odds (again to stop, `clear` for all) |
 
 ## Installing
 
