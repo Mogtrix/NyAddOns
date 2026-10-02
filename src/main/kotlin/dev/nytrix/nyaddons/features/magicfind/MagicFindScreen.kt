@@ -113,7 +113,7 @@ class MagicFindScreen : Screen(Component.literal("Magic Find")) {
 
     private fun hintFor(mob: MfMob): String {
         val best = mob.drops.filter { !it.special && it.chance > 0 }.minByOrNull { it.chance } ?: return ""
-        return "${best.item}  1 in ${"%,d".format(Math.round(1.0 / best.chance))}"
+        return "1 in ${"%,d".format(Math.round(1.0 / best.chance))}  ${best.item}"
     }
 
     // Drawing
