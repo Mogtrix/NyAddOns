@@ -74,12 +74,14 @@ object GreenhousePlannerImpl : GhPlanner {
     fun planDetailed(target: GhMutation, unlocked: BooleanArray? = null): GhPlan? {
         val data = Greenhouse.data
         if (!data.ready) return null
-        val c = synchronized(this) {
-            val known = core
-            if (known != null && coreMutations === data.mutations) known
-            else PlannerCore(data).also { core = it; coreMutations = data.mutations }
-        }
-        return c.planDetailed(target, unlocked)
+        return coreFor(data).planDetailed(target, unlocked)
+    }
+
+    /** The cached core for [data] (rebuilt when its mutation list changes). */
+    fun coreFor(data: GhData): PlannerCore = synchronized(this) {
+        val known = core
+        if (known != null && coreMutations === data.mutations) known
+        else PlannerCore(data).also { core = it; coreMutations = data.mutations }
     }
 }
 
@@ -262,6 +264,41 @@ class PlannerCore(data: GhData) {
         return GhPlan(stocked, stockedIn(stocked, target.id))
     }
 
+    /** Result of [census]: mutation entities whose ring is satisfied, by id, and ids of mutations present but unsatisfied (stock-only). */
+    class Census(val satisfied: Map<String, Int>, val stocked: List<String>)
+
+    /** Counts, for every mutation block in [layout], whether it would spawn (strict: Lonelily needs an empty ring). Null if malformed. */
+    fun census(layout: GhLayout): Census? {
+        val d = decode(layout) ?: return null
+        val ok = HashMap<String, Int>()
+        val stocked = ArrayList<String>()
+        for (e in 0 until d.count) {
+            val id = d.eId[e]
+            if (!isMut[id]) continue
+            if (!noTarget[id] && entitySatisfied(d.grid, d.eId, d.eR, d.eC, e, true)) ok.merge(ids[id], 1) { a, b -> a + b }
+            else if (ids[id] !in stocked) stocked += ids[id]
+        }
+        return Census(ok, stocked)
+    }
+
+    /**
+     * Adds one more block of [target] to [base] (null = empty grid) with the crops its ring needs, reusing what is already placed
+     * (stocked reading: neighbouring mutations are plants, not grown). Randomised by [attempt]. Returns the new layout, in which
+     * [target] spawns, or null when no room was found. [base] is not modified. Not usable for Godseed.
+     */
+    fun extend(base: GhLayout?, target: GhMutation, mask: BooleanArray?, attempt: Int): GhLayout? {
+        val t = index[target.id] ?: return null
+        if (!isMut[t] || noTarget[t] || target.id == GODSEED) return null
+        val d = if (base == null) null else decode(base) ?: return null
+        val run = Search(t, attempt, false, mask?.takeIf { it.size == GRID * GRID }, d)
+        if (!run.run()) return null
+        val layout = run.toLayout(target.id)
+        return if (spawns(layout, target.id)) layout else null
+    }
+
+    /** True when [id] can be asked of [extend] / counted by [census] as a target. */
+    fun targetable(id: String): Boolean = index[id]?.let { isMut[it] && !noTarget[it] && id != GODSEED } ?: false
+
     private fun usesOnly(layout: GhLayout, mask: BooleanArray): Boolean {
         for (r in 0 until GRID) for (c in 0 until GRID) if (layout.cells[r][c] != null && !mask[r * GRID + c]) return false
         return true
@@ -311,7 +348,8 @@ class PlannerCore(data: GhData) {
     }
 
     /** One greedy attempt: place the target, then satisfy every placed mutation's ring, nearest first. */
-    private inner class Search(val target: Int, val attempt: Int, val selfContained: Boolean, val mask: BooleanArray?) {
+    private inner class Search(val target: Int, val attempt: Int, val selfContained: Boolean, val mask: BooleanArray?, val base: Decoded? = null) {
+        var root = 0
         val rnd = Rng(attempt + 1)
         val grid = IntArray(GRID * GRID) { -1 }
         val eId = IntArray(MAX_ENTITIES)
@@ -391,7 +429,7 @@ class PlannerCore(data: GhData) {
 
         fun unmet(e: Int): Int {
             val id = eId[e]
-            if (!isMut[id] || (!selfContained && e != 0)) return 0
+            if (!isMut[id] || (!selfContained && e != root)) return 0
             var sum = 0
             val rc = reqCrop[id]
             val rn = reqCount[id]
@@ -417,10 +455,12 @@ class PlannerCore(data: GhData) {
         }
 
         fun run(): Boolean {
+            if (base != null) for (b in 0 until base.count) if (put(base.eId[b], base.eR[b], base.eC[b]) < 0) return false
+            root = count
             val ts = size[target]
             val tr: Int
             val tc: Int
-            if (mask != null) {
+            if (mask != null || base != null) {
                 // Only spots where the target fits in the unlocked cells: the one nearest the middle first, then random ones.
                 var pick = -1
                 var picks = 0
@@ -437,13 +477,15 @@ class PlannerCore(data: GhData) {
                 tc = pick % GRID
             } else if (attempt == 0) { tr = (GRID - ts) / 2; tc = (GRID - ts) / 2 }
             else { tr = rnd.next(GRID - ts + 1); tc = rnd.next(GRID - ts + 1) }
-            val root = put(target, tr, tc)
+            val placed = put(target, tr, tc)
+            if (placed != root) return false
             if (root < 0 || !feasible(root)) return false
             var q = 0
+            q = root
             while (q < count) {
                 val e = q++
                 val id = eId[e]
-                if (!isMut[id] || ids[id] == LONELILY || (!selfContained && e != 0)) continue
+                if (!isMut[id] || ids[id] == LONELILY || (!selfContained && e != root)) continue
                 val rc = reqCrop[id]
                 val rn = reqCount[id]
                 for (k in rc.indices) {
@@ -478,7 +520,7 @@ class PlannerCore(data: GhData) {
                 if (ov == 0) continue
                 var score = -minOf(ov, need) * 10f + maxOf(0, ov - need) * 4f
                 for (f in 0 until count) {
-                    if (f == e || !isMut[eId[f]] || (!selfContained && f != 0) || !touches(f, r, c, xs)) continue
+                    if (f == e || !isMut[eId[f]] || (!selfContained && f != root) || !touches(f, r, c, xs)) continue
                     val fid = eId[f]
                     var want = 0
                     for (k in reqCrop[fid].indices) if (reqCrop[fid][k] == x) want = reqCount[fid][k] - ringCount(f, x)

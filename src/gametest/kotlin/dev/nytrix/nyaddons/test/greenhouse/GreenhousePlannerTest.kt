@@ -16,7 +16,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
 @Suppress("UnstableApiUsage")
 class GreenhousePlannerTest : FabricClientGameTest {
     /** Test-only parser for `/greenhouse/planner-data.json` (the real data agent's parser lives in another branch). */
-    private class TestData : GhData {
+    internal class TestData : GhData {
         override val ready = true
         override val crops: List<GhCrop>
         override val mutations: List<GhMutation>

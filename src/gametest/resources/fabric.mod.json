@@ -24,6 +24,10 @@
 			},
 			{
 				"adapter": "kotlin",
+				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhouseMaxTest"
+			},
+			{
+				"adapter": "kotlin",
 				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhouseScreenTest"
 			}
 		]
