@@ -1,6 +1,7 @@
 package dev.nytrix.nyaddons.features.hunting
 
 import dev.nytrix.nyaddons.NyAddOns
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.gui.ConfigTheme
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.EditBox
@@ -22,7 +23,11 @@ class ShardPickerScreen : Screen(Component.literal("Shard Picker")) {
 
     private val pages get() = ((shown.size + PAGE_SIZE - 1) / PAGE_SIZE).coerceAtLeast(1)
 
-    override fun init() {
+    private val site = Safe.site("Shard Picker")
+
+    override fun init() = site.screen(this) { build() }
+
+    private fun build() {
         left = (width - PANEL_WIDTH) / 2
         top = (height - PANEL_HEIGHT) / 2
         val search = EditBox(font, left + 8, top + 18, PANEL_WIDTH - 16, 14, Component.literal("Search"))
@@ -63,7 +68,10 @@ class ShardPickerScreen : Screen(Component.literal("Shard Picker")) {
         return shown.getOrNull(page * PAGE_SIZE + row * COLUMNS + column)
     }
 
-    override fun extractRenderState(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun extractRenderState(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) =
+        site.screen(this) { render(graphics, mouseX, mouseY, partialTick) }
+
+    private fun render(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         drawPanel(graphics, left, top, PANEL_WIDTH, PANEL_HEIGHT)
         graphics.text(font, "Shard Picker", left + 8, top + 6, TITLE_COLOR, false)
         val pageText = "${page + 1}/$pages"
@@ -108,7 +116,10 @@ class ShardPickerScreen : Screen(Component.literal("Shard Picker")) {
         if (ShardTracker.isTracked(shard)) "§eClick to stop tracking!" else "§eClick to track!",
     )
 
-    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
+    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean =
+        site.screenCall(this, false) { click(event, doubleClick) }
+
+    private fun click(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
         shardAt(event.x(), event.y())?.let { shard ->
             ShardTracker.toggle(shard)
             return true
@@ -122,7 +133,7 @@ class ShardPickerScreen : Screen(Component.literal("Shard Picker")) {
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean =
-        turnPage(if (scrollY > 0) -1 else 1)
+        site.screenCall(this, false) { turnPage(if (scrollY > 0) -1 else 1) }
 
     private fun turnPage(by: Int): Boolean {
         page = (page + by).coerceIn(0, pages - 1)

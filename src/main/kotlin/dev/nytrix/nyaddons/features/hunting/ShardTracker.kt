@@ -5,6 +5,7 @@ import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.AlertUtils
 import dev.nytrix.nyaddons.core.ChatUtils
 import dev.nytrix.nyaddons.core.NyEvents
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.ShardProgress
 import dev.nytrix.nyaddons.core.SkyBlockData
 import dev.nytrix.nyaddons.core.Storage
@@ -76,6 +77,7 @@ object ShardTracker : Feature {
     private const val CHEST_COLUMNS = 9
     private val romanNumerals = listOf("I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X")
 
+    private val site = Safe.site("Shard Tracker")
     private val config get() = NyAddOns.config.hunting.shardTracker
     private val tracked get() = Storage.profile.trackedShards
 
@@ -105,10 +107,12 @@ object ShardTracker : Feature {
         // The track key and its hint only exist in the menus that list shards.
         ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
             if (screen !is AbstractContainerScreen<*>) return@register
-            val title = ChatUtils.stripColor(screen.title.string)
-            if (boxTitle.containsMatchIn(title) || menuTitle.containsMatchIn(title)) {
-                ScreenKeyboardEvents.allowKeyPress(screen).register { _, key -> !onMenuKey(screen, key.key()) }
-                ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> drawHint(screen, graphics) }
+            site {
+                val title = ChatUtils.stripColor(screen.title.string)
+                if (boxTitle.containsMatchIn(title) || menuTitle.containsMatchIn(title)) {
+                    ScreenKeyboardEvents.allowKeyPress(screen).register { _, key -> site.call(true) { !onMenuKey(screen, key.key()) } }
+                    ScreenEvents.afterExtract(screen).register { _, graphics, _, _, _ -> site { drawHint(screen, graphics) } }
+                }
             }
         }
     }
@@ -146,17 +150,19 @@ object ShardTracker : Feature {
     // Commands
 
     private fun huntCommand(): Command = ClientCommands.literal("hunt")
-        .executes { ShardPickerScreen.open(); 1 }
+        .executes { site { ShardPickerScreen.open() }; 1 }
         .then(
             ClientCommands.argument("shard", StringArgumentType.greedyString())
                 .suggests { _, builder ->
-                    val typed = builder.remaining.lowercase()
-                    (listOf("clear") + ShardRepo.all.map { it.name })
-                        .filter { it.lowercase().startsWith(typed) }
-                        .forEach { builder.suggest(it) }
+                    site {
+                        val typed = builder.remaining.lowercase()
+                        (listOf("clear") + ShardRepo.all.map { it.name })
+                            .filter { it.lowercase().startsWith(typed) }
+                            .forEach { builder.suggest(it) }
+                    }
                     builder.buildFuture()
                 }
-                .executes { context -> onCommand(StringArgumentType.getString(context, "shard")); 1 },
+                .executes { context -> site { onCommand(StringArgumentType.getString(context, "shard")) }; 1 },
         )
 
     private fun onCommand(argument: String) {
@@ -364,9 +370,19 @@ object ShardTracker : Feature {
 
     private fun drawHint(screen: AbstractContainerScreen<*>, graphics: GuiGraphicsExtractor) {
         if (!config.enabled || !config.showHint || !SkyBlockData.onSkyBlock) return
-        val key = InputConstants.Type.KEYSYM.getOrCreate(config.trackKey).displayName.string
-        val y = HINT_TOP_MARGIN
-        graphics.centeredText(Minecraft.getInstance().font, "§8[§7Ny§8] §ePress §b$key §eto track a shard", screen.width / 2, y, -1)
+        graphics.centeredText(Minecraft.getInstance().font, hintText(config.trackKey), screen.width / 2, HINT_TOP_MARGIN, -1)
+    }
+
+    // The hint is drawn every frame, so its text is only built again when the key changes.
+    private var hintKey = Int.MIN_VALUE
+    private var hint = ""
+
+    private fun hintText(trackKey: Int): String {
+        if (trackKey != hintKey) {
+            hintKey = trackKey
+            hint = "§8[§7Ny§8] §ePress §b${InputConstants.Type.KEYSYM.getOrCreate(trackKey).displayName.string} §eto track a shard"
+        }
+        return hint
     }
 
     /** The track key, pressed while hovering a shard in the Hunting Box or Attribute Menu. */

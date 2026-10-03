@@ -52,16 +52,23 @@ object SkyBlockData {
             area = null
             return
         }
-        val tabLines = connection.onlinePlayers.mapNotNull { info ->
-            info.tabListDisplayName?.string?.let { ChatUtils.stripColor(it).trim() }
-        }
-        area = tabLines.firstNotNullOfOrNull { line ->
-            when {
-                line.startsWith("Area: ") -> line.removePrefix("Area: ").trim()
-                line.startsWith("Dungeon: ") -> line.removePrefix("Dungeon: ").trim()
-                else -> null
+        // One pass over the tab list, stopping as soon as both lines are found.
+        var foundArea: String? = null
+        var foundProfile: String? = null
+        for (info in connection.onlinePlayers) {
+            if (foundArea != null && foundProfile != null) break
+            val line = info.tabListDisplayName?.string?.let { ChatUtils.stripColor(it).trim() } ?: continue
+            if (foundArea == null) {
+                foundArea = when {
+                    line.startsWith("Area: ") -> line.removePrefix("Area: ").trim()
+                    line.startsWith("Dungeon: ") -> line.removePrefix("Dungeon: ").trim()
+                    else -> null
+                }
+                if (foundArea != null) continue
             }
+            if (foundProfile == null) foundProfile = profileLine.find(line)?.groupValues?.get(1)
         }
-        tabLines.firstNotNullOfOrNull { profileLine.find(it)?.groupValues?.get(1) }?.let { profile = it }
+        area = foundArea
+        foundProfile?.let { profile = it }
     }
 }

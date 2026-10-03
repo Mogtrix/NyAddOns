@@ -4,6 +4,7 @@ import dev.nytrix.nyaddons.config.NyConfig
 import dev.nytrix.nyaddons.core.ChatUtils
 import dev.nytrix.nyaddons.core.MenuDump
 import dev.nytrix.nyaddons.core.NyEvents
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.SkyBlockData
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.features.Features
@@ -52,16 +53,31 @@ object NyAddOns : ClientModInitializer {
         managedConfig = ManagedConfig.create(File(directory, "config.json"), NyConfig::class.java)
         Storage.load(File(directory, "data.json"))
 
-        ConfigTheme.init()
-        OverlayManager.init()
-        MenuDump.init()
-        Features.all.forEach { it.init() }
+        // A feature that fails to start is left out; the rest of the mod and the game carry on.
+        core { ConfigTheme.init() }
+        core { OverlayManager.init() }
+        core { MenuDump.init() }
+        for (feature in Features.all) {
+            val site = Safe.site(Safe.nameOf(feature))
+            site { feature.init() }
+        }
         registerEvents()
         registerCommands()
     }
 
+    /** Guards the mod's own plumbing (the tick loop, saving, opening screens). */
+    private val core = Safe.site("NyAddOns")
+
     fun openConfig() {
         pendingScreen = { managedConfig.openConfigGui() }
+    }
+
+    /** Closes [screen] on the next tick if it is still open; used when a screen failed and cannot keep drawing. */
+    fun closeScreen(screen: Screen) {
+        pendingScreen = {
+            val mc = Minecraft.getInstance()
+            if (mc.screen === screen) mc.setScreen(null)
+        }
     }
 
     fun openScreen(screen: () -> Screen) {
@@ -69,30 +85,34 @@ object NyAddOns : ClientModInitializer {
     }
 
     fun saveConfig() {
-        managedConfig.saveToFile()
+        core { managedConfig.saveToFile() }
     }
 
     private fun registerEvents() {
         ClientTickEvents.END_CLIENT_TICK.register { mc ->
-            pendingScreen?.let {
-                pendingScreen = null
-                it()
+            core {
+                pendingScreen?.let {
+                    pendingScreen = null
+                    it()
+                }
+                ticks++
+                OverlayManager.tick()
             }
-            ticks++
-            OverlayManager.tick()
             val playing = SkyBlockData.onSkyBlock && mc.player != null
             if (playing) NyEvents.tick.forEach { it() }
             if (ticks % 20 == 0) {
-                SkyBlockData.update()
+                core { SkyBlockData.update() }
                 if (playing) NyEvents.second.forEach { it() }
             }
-            if (ticks % SAVE_INTERVAL_TICKS == 0) Storage.saveIfDirty()
+            if (ticks % SAVE_INTERVAL_TICKS == 0) core { Storage.saveIfDirty() }
         }
 
         ClientReceiveMessageEvents.GAME.register { message, overlay ->
-            if (!overlay && SkyBlockData.onSkyBlock) {
-                val text = ChatUtils.stripColor(message.string)
-                NyEvents.chat.forEach { it(text) }
+            core {
+                if (!overlay && SkyBlockData.onSkyBlock) {
+                    val text = ChatUtils.stripColor(message.string)
+                    NyEvents.chat.forEach { it(text) }
+                }
             }
         }
 
@@ -102,22 +122,24 @@ object NyAddOns : ClientModInitializer {
 
         ClientLifecycleEvents.CLIENT_STOPPING.register {
             saveConfig()
-            Storage.saveIfDirty(wait = true)
+            core { Storage.saveIfDirty(wait = true) }
         }
     }
 
     private fun registerCommands() {
         ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ ->
-            for (name in listOf("ny", "nyaddons", "Ny", "NyAddOns")) {
-                val root = ClientCommands.literal(name)
-                    .executes { openConfig(); 1 }
-                    .then(ClientCommands.literal("gui").executes { PositionEditorScreen.open(); 1 })
-                    .then(ClientCommands.literal("reset").executes { resetTimers(); 1 })
-                    .then(ClientCommands.literal("help").executes { showHelp(); 1 })
-                Features.all.flatMap { it.subcommands() }.forEach { root.then(it) }
-                dispatcher.register(root)
+            core {
+                for (name in listOf("ny", "nyaddons", "Ny", "NyAddOns")) {
+                    val root = ClientCommands.literal(name)
+                        .executes { core { openConfig() }; 1 }
+                        .then(ClientCommands.literal("gui").executes { core { PositionEditorScreen.open() }; 1 })
+                        .then(ClientCommands.literal("reset").executes { core { resetTimers() }; 1 })
+                        .then(ClientCommands.literal("help").executes { core { showHelp() }; 1 })
+                    Features.all.flatMap { it.subcommands() }.forEach { root.then(it) }
+                    dispatcher.register(root)
+                }
+                Features.all.flatMap { it.commands() }.forEach { dispatcher.register(it) }
             }
-            Features.all.flatMap { it.commands() }.forEach { dispatcher.register(it) }
         }
     }
 

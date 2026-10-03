@@ -2,6 +2,7 @@ package dev.nytrix.nyaddons.gui
 
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.config.Position
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.SkyBlockData
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements
@@ -52,6 +53,9 @@ class Overlay(
     val content: () -> OverlayContent?,
     val onHud: Boolean = true,
 ) {
+    /** Failures of this overlay's content or drawing; after too many it stays hidden for the session. */
+    val site = Safe.site(label)
+
     private var cached: OverlayContent? = null
     private var cachedAt = Int.MIN_VALUE
     private var cachedVersion = -1
@@ -61,11 +65,12 @@ class Overlay(
      * nothing an overlay shows changes faster than that.
      */
     fun current(): OverlayContent? {
+        if (site.off) return null
         val now = OverlayManager.ticks
         if (cachedVersion != OverlayManager.version || now - cachedAt >= OverlayManager.REFRESH_TICKS) {
-            cached = content()
             cachedAt = now
             cachedVersion = OverlayManager.version
+            cached = site.call(null) { content() }
         }
         return cached
     }
@@ -82,6 +87,8 @@ object OverlayManager {
     const val REFRESH_TICKS = 5
 
     val overlays = mutableListOf<Overlay>()
+
+    private val hud = Safe.site("Overlays")
 
     /** Client ticks since the game started. */
     var ticks = 0
@@ -108,14 +115,15 @@ object OverlayManager {
         HudElementRegistry.attachElementBefore(
             VanillaHudElements.CHAT,
             Identifier.fromNamespaceAndPath(NyAddOns.MOD_ID, "overlays"),
-        ) { graphics, _ -> render(graphics) }
+        ) { graphics, _ -> hud { render(graphics) } }
     }
 
     private fun render(graphics: GuiGraphicsExtractor) {
         val mc = Minecraft.getInstance()
         if (!SkyBlockData.onSkyBlock || mc.options.hideGui || mc.screen is PositionEditorScreen) return
-        for (overlay in overlays) {
-            if (overlay.onHud) overlay.current()?.let { draw(graphics, overlay.position(), it) }
+        for (i in overlays.indices) {
+            val overlay = overlays[i]
+            if (overlay.onHud) overlay.site { overlay.current()?.let { draw(graphics, overlay.position(), it) } }
         }
     }
 
@@ -125,9 +133,12 @@ object OverlayManager {
         val scale = scaleOf(position)
         val pose = graphics.pose()
         pose.pushMatrix()
-        pose.translate(position.x.toFloat(), position.y.toFloat())
-        pose.scale(scale, scale)
-        content.draw(graphics)
-        pose.popMatrix()
+        try {
+            pose.translate(position.x.toFloat(), position.y.toFloat())
+            pose.scale(scale, scale)
+            content.draw(graphics)
+        } finally {
+            pose.popMatrix()
+        }
     }
 }

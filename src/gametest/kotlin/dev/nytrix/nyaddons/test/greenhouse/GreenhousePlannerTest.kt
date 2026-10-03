@@ -32,7 +32,7 @@ class GreenhousePlannerTest : FabricClientGameTest {
                 GhMutation(
                     id, o["name"].asString, o["rarity"].asString, o["size"].asInt, o["ground"].asString,
                     o.getAsJsonArray("requirements").map { GhRequirement(it.asJsonObject["crop"].asString, it.asJsonObject["count"].asInt) },
-                    o["growth_stages"].asInt, o["requires_watering"].asBoolean, 0L, 0, 0,
+                    o["growth_stages"].asInt, o["requires_watering"].asBoolean, 0L, 0,
                 )
             }
         }

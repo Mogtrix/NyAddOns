@@ -8,6 +8,7 @@ import com.mojang.authlib.properties.Property
 import com.mojang.authlib.properties.PropertyMap
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.Downloads
+import dev.nytrix.nyaddons.core.Safe
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.core.component.DataComponents
@@ -66,7 +67,7 @@ object GhIcons {
     /** Starts the background load of the head textures if that has not happened. Safe to call every second. */
     fun request() {
         if (!started.compareAndSet(false, true)) return
-        Thread({ load(NyAddOns.directory) }, "NyAddOns greenhouse icons").apply { isDaemon = true }.start()
+        Safe.background("greenhouse icons") { load(NyAddOns.directory) }
     }
 
     /** Replaces the head textures (id to base64 skin value). For tests; skips the network. */

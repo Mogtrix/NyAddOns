@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.ChatUtils
 import dev.nytrix.nyaddons.core.NyEvents
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.SkyBlockData
 import dev.nytrix.nyaddons.features.Command
 import dev.nytrix.nyaddons.features.Feature
@@ -14,6 +15,7 @@ import net.minecraft.client.Minecraft
 /** The Greenhouse window, its commands and keybind. */
 object GreenhouseFeature : Feature {
 
+    private val site = Safe.site("Greenhouse")
     private val config get() = NyAddOns.config.garden.greenhouse
     private var keyWasDown = false
 
@@ -21,7 +23,7 @@ object GreenhouseFeature : Feature {
         NyEvents.second += {
             if (config.enabled && SkyBlockData.area == "Garden") Greenhouse.data.request()
         }
-        ClientTickEvents.END_CLIENT_TICK.register { mc -> pollKey(mc) }
+        ClientTickEvents.END_CLIENT_TICK.register { mc -> site { pollKey(mc) } }
         GreenhousePin.register()
     }
 
@@ -29,7 +31,7 @@ object GreenhouseFeature : Feature {
 
     override fun subcommands(): List<Command> = listOf(command("greenhouse"))
 
-    private fun command(name: String): Command = ClientCommands.literal(name).executes { open(); 1 }
+    private fun command(name: String): Command = ClientCommands.literal(name).executes { site { open() }; 1 }
 
     fun open() {
         if (!config.enabled) {

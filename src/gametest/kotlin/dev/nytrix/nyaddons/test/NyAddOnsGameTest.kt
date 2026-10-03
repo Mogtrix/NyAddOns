@@ -1,7 +1,9 @@
 package dev.nytrix.nyaddons.test
 
 import dev.nytrix.nyaddons.NyAddOns
+import dev.nytrix.nyaddons.core.EventList
 import dev.nytrix.nyaddons.core.NyEvents
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.TrackedTree
 import dev.nytrix.nyaddons.features.hunting.Shard
 import dev.nytrix.nyaddons.gui.OverlayManager
@@ -716,6 +718,30 @@ class NyAddOnsGameTest : FabricClientGameTest {
             val kept = (withData - usedHeap()) / 1024
             NyAddOns.logger.info("[NyBench] recipe data: $millis ms to load, $allocated MB allocated while loading, about $kept KB kept in memory")
         }
+        context.onClient { guardsContainFailures() }
+    }
+
+    /** A failing callback must neither escape to the game nor keep failing: it is logged, then switched off after 5 failures. */
+    private fun guardsContainFailures() {
+        val site = Safe.site("Test Feature")
+        var failed = 0
+        repeat(8) { site { failed++; error("boom") } }
+        check(failed == 5) { "a failing guarded callback ran $failed times, expected 5 before it was switched off" }
+        check(site.off) { "the site was not switched off" }
+        var healthy = 0
+        site { healthy++ }
+        check(healthy == 0) { "a switched-off site still ran" }
+        check(site.call(7) { 3 } == 7) { "a switched-off site answered" }
+        Safe.site("Other Test Feature").invoke { healthy++ }
+        check(healthy == 1) { "an unrelated site was switched off too" }
+        val events = EventList<() -> Unit>()
+        events += { error("boom") }
+        repeat(8) { events.forEach { it() } }
+        val log = java.io.File(NyAddOns.directory, "errors.log")
+        check(log.length() in 1..300_000) { "errors.log is missing or too large: ${log.length()}" }
+        val thread = Safe.background("test thread") { error("boom in a thread") }
+        thread.join(5_000)
+        check(!thread.isAlive) { "the guarded thread did not end" }
     }
 
     /** What the HUD does for the overlays every frame, apart from the drawing itself. */

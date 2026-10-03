@@ -1,6 +1,7 @@
 package dev.nytrix.nyaddons.gui
 
 import dev.nytrix.nyaddons.NyAddOns
+import dev.nytrix.nyaddons.core.Safe
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.screens.Screen
@@ -12,6 +13,7 @@ import kotlin.math.roundToInt
 /** Shows every overlay at once so they can be dragged around and resized, like SkyHanni's `/sh gui`. */
 class PositionEditorScreen : Screen(Component.literal("NyAddOns Position Editor")) {
 
+    private val site = Safe.site("Position Editor")
     private var dragging: Overlay? = null
     private var grabX = 0
     private var grabY = 0
@@ -34,7 +36,10 @@ class PositionEditorScreen : Screen(Component.literal("NyAddOns Position Editor"
         // Keep the game visible behind the editor: no blur, no dimming.
     }
 
-    override fun extractRenderState(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun extractRenderState(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) =
+        site.screen(this) { render(graphics, mouseX, mouseY, partialTick) }
+
+    private fun render(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick)
         val font = Minecraft.getInstance().font
         graphics.centeredText(font, "§cNyAddOns Position Editor", width / 2, 8, WHITE)
@@ -64,7 +69,10 @@ class PositionEditorScreen : Screen(Component.literal("NyAddOns Position Editor"
         }
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
+    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean =
+        site.screenCall(this, false) { click(event, doubleClick) }
+
+    private fun click(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
         val box = boxAt(event.x(), event.y()) ?: return super.mouseClicked(event, doubleClick)
         dragging = box.overlay
         grabX = event.x().toInt() - box.position.x
@@ -72,7 +80,10 @@ class PositionEditorScreen : Screen(Component.literal("NyAddOns Position Editor"
         return true
     }
 
-    override fun mouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
+    override fun mouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean =
+        site.screenCall(this, false) { drag(event, dragX, dragY) }
+
+    private fun drag(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
         val position = dragging?.position() ?: return super.mouseDragged(event, dragX, dragY)
         position.x = event.x().toInt() - grabX
         position.y = event.y().toInt() - grabY
@@ -84,14 +95,19 @@ class PositionEditorScreen : Screen(Component.literal("NyAddOns Position Editor"
         return super.mouseReleased(event)
     }
 
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {
+    override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean =
+        site.screenCall(this, false) { scroll(mouseX, mouseY, scrollY) }
+
+    private fun scroll(mouseX: Double, mouseY: Double, scrollY: Double): Boolean {
         val position = boxAt(mouseX, mouseY)?.position ?: return false
         val steps = (position.scale * 10).roundToInt() + if (scrollY > 0) 1 else -1
         position.scale = (steps / 10f).coerceIn(0.5f, 5f)
         return true
     }
 
-    override fun keyPressed(event: KeyEvent): Boolean {
+    override fun keyPressed(event: KeyEvent): Boolean = site.screenCall(this, false) { key(event) }
+
+    private fun key(event: KeyEvent): Boolean {
         val mouse = Minecraft.getInstance().mouseHandler
         val window = Minecraft.getInstance().window
         val mouseX = mouse.xpos() * window.guiScaledWidth / window.screenWidth

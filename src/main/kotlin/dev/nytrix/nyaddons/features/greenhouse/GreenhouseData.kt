@@ -6,6 +6,7 @@ import com.google.gson.stream.JsonToken
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.Downloads
 import dev.nytrix.nyaddons.core.NyEvents
+import dev.nytrix.nyaddons.core.Safe
 import java.io.File
 import java.io.Reader
 
@@ -77,7 +78,7 @@ object GreenhouseDataImpl : GhData {
                 NyEvents.second.add(::tick)
             }
         }
-        Thread({
+        Safe.background("greenhouse data") {
             try {
                 val target = file
                 if (!loaded && target.exists()) readFile(target)
@@ -88,7 +89,7 @@ object GreenhouseDataImpl : GhData {
             } finally {
                 loading = false
             }
-        }, "NyAddOns greenhouse data").apply { isDaemon = true }.start()
+        }
     }
 
     private fun readFile(target: File) {
@@ -102,7 +103,10 @@ object GreenhouseDataImpl : GhData {
 
     /** Frees the data when it has not been read for a while. Once a second. */
     private fun tick() {
-        if (snapshot != null && clock() - lastAccess > idleMillis) snapshot = null
+        if (snapshot != null && clock() - lastAccess > idleMillis) {
+            snapshot = null
+            GreenhousePlannerImpl.release()
+        }
     }
 
     /** For tests: parses [json] without touching the network or the disk and makes it the loaded data. */
@@ -208,7 +212,7 @@ object GreenhouseDataImpl : GhData {
         val cost = AnalysisCosts[id]
         return GhMutation(
             id, name, rarity, size, soil, requirements, stages, watering,
-            cost?.coins ?: 0L, cost?.copper ?: 0, cost?.firstCopper ?: 0,
+            cost?.coins ?: 0L, cost?.copper ?: 0,
         )
     }
 }

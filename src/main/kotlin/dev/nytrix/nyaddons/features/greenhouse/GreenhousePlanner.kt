@@ -77,6 +77,13 @@ object GreenhousePlannerImpl : GhPlanner {
         return coreFor(data).planDetailed(target, unlocked)
     }
 
+    /** Lets go of the cached core, which holds on to the mutation list; the next plan builds it again. */
+    @Synchronized
+    fun release() {
+        core = null
+        coreMutations = null
+    }
+
     /** The cached core for [data] (rebuilt when its mutation list changes). */
     fun coreFor(data: GhData): PlannerCore = synchronized(this) {
         val known = core

@@ -36,7 +36,7 @@ class GreenhouseScreenTest : FabricClientGameTest {
     )
 
     private fun mut(id: String, name: String, rarity: String, coins: Long, copper: Int, vararg req: Pair<String, Int>) =
-        GhMutation(id, name, rarity, 1, "soul_sand", req.map { GhRequirement(it.first, it.second) }, 3, id.length % 2 == 0, coins, copper, copper / 20)
+        GhMutation(id, name, rarity, 1, "soul_sand", req.map { GhRequirement(it.first, it.second) }, 3, id.length % 2 == 0, coins, copper)
 
     private val mutations = listOf(
         mut("ashwreath", "Ashwreath", "common", 10_000, 5, "nether_wart" to 2),

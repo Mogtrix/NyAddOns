@@ -1,5 +1,6 @@
 package dev.nytrix.nyaddons.features.greenhouse
 
+import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.ChatUtils
 import dev.nytrix.nyaddons.core.Storage
 import net.minecraft.client.Minecraft
@@ -30,7 +31,7 @@ object GreenhouseProgressReader {
         private set
 
     fun onTick() {
-        if (++ticks % CHECK_INTERVAL_TICKS != 0) return
+        if (++ticks % CHECK_INTERVAL_TICKS != 0 || !NyAddOns.config.garden.greenhouse.enabled) return
         val screen = Minecraft.getInstance().screen as? AbstractContainerScreen<*>
         if (screen !== openScreen) {
             openScreen = screen

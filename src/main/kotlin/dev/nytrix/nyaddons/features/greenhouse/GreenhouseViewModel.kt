@@ -1,12 +1,9 @@
 package dev.nytrix.nyaddons.features.greenhouse
 
-/*
- * Pure helpers for the Greenhouse window, kept in one file with plain data classes. The numbers shared with GreenhouseGoals
- * (milestones, Rose Dragon amounts) are read from there.
- */
+/* Pure helpers for the Greenhouse window, kept in one file with plain data classes. */
 
 /** DNA Analysis milestone thresholds (distinct analysed mutations). */
-val MILESTONE_THRESHOLDS = IntArray(GreenhouseGoals.tiers.size) { GreenhouseGoals.tiers[it].threshold }
+val MILESTONE_THRESHOLDS = intArrayOf(1, 10, 15, 20, 30, 40)
 
 private val ROMAN = arrayOf("I", "II", "III", "IV", "V", "VI")
 

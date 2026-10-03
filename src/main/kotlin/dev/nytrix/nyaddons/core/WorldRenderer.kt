@@ -28,13 +28,16 @@ class WorldRenderer(private val context: LevelRenderContext) {
         }
         val pose = context.poseStack()
         pose.pushPose()
-        pose.translate(dx, y - cameraPos.y, dz)
-        val time = Math.floorMod(context.levelState().gameTime, 40L).toFloat()
-        BeaconRenderer.submitBeaconBeam(
-            pose, context.submitNodeCollector(), BeaconRenderer.BEAM_LOCATION,
-            1f, time, 0, BEAM_HEIGHT, rgb or OPAQUE, 0.2f, 0.25f,
-        )
-        pose.popPose()
+        try {
+            pose.translate(dx, y - cameraPos.y, dz)
+            val time = Math.floorMod(context.levelState().gameTime, 40L).toFloat()
+            BeaconRenderer.submitBeaconBeam(
+                pose, context.submitNodeCollector(), BeaconRenderer.BEAM_LOCATION,
+                1f, time, 0, BEAM_HEIGHT, rgb or OPAQUE, 0.2f, 0.25f,
+            )
+        } finally {
+            pose.popPose()
+        }
     }
 
     /** Text that always faces the camera, visible through blocks and kept readable at a distance. */
@@ -48,12 +51,15 @@ class WorldRenderer(private val context: LevelRenderContext) {
         val scale = (distance / 6.0).coerceAtLeast(1.0).toFloat()
         val pose = context.poseStack()
         pose.pushPose()
-        pose.translate(offset.x, offset.y, offset.z)
-        pose.scale(scale, scale, scale)
-        context.submitNodeCollector().submitNameTag(
-            pose, Vec3.ZERO, 0, text, true, FULL_BRIGHT, distance * distance, camera,
-        )
-        pose.popPose()
+        try {
+            pose.translate(offset.x, offset.y, offset.z)
+            pose.scale(scale, scale, scale)
+            context.submitNodeCollector().submitNameTag(
+                pose, Vec3.ZERO, 0, text, true, FULL_BRIGHT, distance * distance, camera,
+            )
+        } finally {
+            pose.popPose()
+        }
     }
 
     private companion object {

@@ -3,6 +3,7 @@ package dev.nytrix.nyaddons.features.greenhouse
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.config.GreenhouseView
 import dev.nytrix.nyaddons.core.PinnedPlot
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.core.TimeUtils
 import dev.nytrix.nyaddons.gui.ConfigTheme
@@ -95,6 +96,7 @@ private class Rect(var x: Int, var y: Int, var w: Int, var h: Int) {
 /** The Greenhouse helper window: unique mutations checklist, Rose Dragon tree, a mutation browser with a layout planner and an amounts planner. */
 class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
+    private val site = Safe.site("Greenhouse")
     private val config get() = NyAddOns.config.garden.greenhouse
     private val saved get() = Storage.profile.greenhouse
 
@@ -275,7 +277,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private val detailWidth get() = (panelWidth * 0.30).toInt().coerceIn(116, 230)
     private val gridLeft get() = detailLeft + detailWidth + 8
 
-    override fun init() {
+    override fun init() = site.screen(this) { setUp() }
+
+    private fun setUp() {
         panelWidth = (width - 12).coerceIn(280, 780)
         panelHeight = (height - 12).coerceIn(180, 450)
         left = (width - panelWidth) / 2
@@ -335,7 +339,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         pinPlanner = Rect(sideLeft + sideWidth - pinW, linesY + 17, pinW, BUTTON_H - 2)
     }
 
-    override fun tick() {
+    override fun tick() = site.screen(this) { update() }
+
+    private fun update() {
         ticks++
         val stamp = Greenhouse.stock.sacksUpdatedAt
         // New numbers from a sack menu, or a plan or fit answer arriving, redraw straight away; otherwise once a second.
@@ -598,7 +604,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
     // Drawing
 
-    override fun extractRenderState(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun extractRenderState(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) =
+        site.screen(this) { render(graphics, mouseX, mouseY, partialTick) }
+
+    private fun render(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         iconCount = 0
         gridPicture = null
         drawPanel(graphics, left, top, panelWidth, panelHeight)
@@ -1119,7 +1128,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
     // Input
 
-    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
+    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean =
+        site.screenCall(this, false) { click(event, doubleClick) }
+
+    private fun click(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
         val mx = event.x().toInt()
         val my = event.y().toInt()
         val x = dropdownX
@@ -1405,14 +1417,14 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         capRunning = true
         val planner = Greenhouse.planner
         val data = Greenhouse.data
-        Thread({
+        Safe.background("greenhouse cap") {
             val cap = try {
                 GhMax.capAlongside(planner, data, req.amounts, req.id, req.mask) ?: NO_CAP
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 NO_CAP
             }
             capAnswers.add(CapAnswer(req.key, req.id, cap))
-        }, "NyAddOns greenhouse cap").apply { isDaemon = true }.start()
+        }
     }
 
     private fun drainCaps() {
@@ -1492,7 +1504,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         rebuild()
     }
 
-    override fun charTyped(event: CharacterEvent): Boolean {
+    override fun charTyped(event: CharacterEvent): Boolean = site.screenCall(this, false) { typed(event) }
+
+    private fun typed(event: CharacterEvent): Boolean {
         if (focus == FOCUS_NONE) return super.charTyped(event)
         val ch = event.codepoint()
         if (ch < '0'.code || ch > '9'.code) return true
@@ -1504,7 +1518,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         return true
     }
 
-    override fun keyPressed(event: KeyEvent): Boolean {
+    override fun keyPressed(event: KeyEvent): Boolean = site.screenCall(this, false) { key(event) }
+
+    private fun key(event: KeyEvent): Boolean {
         val key = event.key()
         if (focus != FOCUS_NONE) {
             when (key) {
@@ -1562,7 +1578,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         plannerSide.busy = true
         plannerSide.busyText = "Working..."
         val generation = ++maxGeneration
-        Thread({
+        Safe.background("greenhouse max") {
             var along: GhPlaceResult? = null
             var result: GhMaxResult? = null
             var plan: GhPlaceResult? = null
@@ -1576,7 +1592,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
                     result = GhMax.solve(planner, data, candidates, copy, analysed, budget, oneOfEach)
                     plan = GhMax.settle(planner, data, GhPlaceResult(result.counts, result.layout, emptyMap(), result.counts, result.stocked, result.totalCells), copy, GhMax.REPLAN_BUDGET_MILLIS, stale)
                 }
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
             }
             if (generation == maxGeneration) {
                 maxPlan = plan
@@ -1584,7 +1600,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
                 alongAnswer = along
                 maxDone = true
             }
-        }, "NyAddOns greenhouse max").apply { isDaemon = true }.start()
+        }
     }
 
     private fun finishMax(result: GhMaxResult?, along: GhPlaceResult?, row: String?) {
@@ -1642,17 +1658,17 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val generation = mixGeneration
         mixWorking = true
         mixDone = false
-        Thread({
+        Safe.background("greenhouse mix") {
             val result = try {
                 GhMax.replan(planner, data, amounts, copy, GhMax.REPLAN_BUDGET_MILLIS) { generation != mixGeneration }
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 null
             }
             if (generation == mixGeneration) {
                 mixResult = result
                 mixDone = true
             }
-        }, "NyAddOns greenhouse mix").apply { isDaemon = true }.start()
+        }
     }
 
     /** Fills the Planner side panel from the shown plan: summary, rounds, layout, what did not fit and the crops needed. */
@@ -1788,17 +1804,17 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         rose.busy = true
         val generation = panelGeneration
         val copy = usableMask.copyOf()
-        Thread({
+        Safe.background("greenhouse panel") {
             val result = try {
                 Greenhouse.planner.plan(target, copy)
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 null
             }
             if (generation == panelGeneration) {
                 panelResult = result
                 panelDone = true
             }
-        }, "NyAddOns greenhouse panel").apply { isDaemon = true }.start()
+        }
     }
 
     private fun finishPanelPlan(result: GhLayout?) {
@@ -1843,10 +1859,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         planning = true
         val generation = planGeneration
         val copy = usableMask.copyOf()
-        Thread({
+        Safe.background("greenhouse planner") {
             val result = try {
                 Greenhouse.planner.plan(target, copy)
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 null
             }
             if (generation == planGeneration) {
@@ -1854,10 +1870,13 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
                 planDone = true
                 planning = false
             }
-        }, "NyAddOns greenhouse planner").apply { isDaemon = true }.start()
+        }
     }
 
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {
+    override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean =
+        site.screenCall(this, false) { scrolled(mouseX, mouseY, scrollY) }
+
+    private fun scrolled(mouseX: Double, mouseY: Double, scrollY: Double): Boolean {
         if (plotsOpen) return true
         if (view == GreenhouseView.PLANNER && mouseX >= sideLeft - 4 && mouseY >= listTop && mouseY < listBottom) {
             val range = (sideContentH - (listBottom - listTop - 16)).coerceAtLeast(0)

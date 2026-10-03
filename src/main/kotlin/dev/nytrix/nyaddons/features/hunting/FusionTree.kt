@@ -4,6 +4,7 @@ import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.config.FusionTreeStyle
 import dev.nytrix.nyaddons.config.Position
 import dev.nytrix.nyaddons.core.ChatUtils
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.SkyBlockData
 import dev.nytrix.nyaddons.features.Feature
 import dev.nytrix.nyaddons.gui.Overlay
@@ -68,6 +69,7 @@ object FusionTree : Feature {
     private const val MACHINE_SLOTS = 27
     private const val MACHINE_CAPACITY = 2
 
+    private val site = Safe.site("Fusion Tree")
     private val config get() = NyAddOns.config.hunting.fusionTree
 
     override fun init() {
@@ -76,15 +78,20 @@ object FusionTree : Feature {
         // Decided once per screen, so ordinary chests never run any of this.
         ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
             if (screen !is AbstractContainerScreen<*>) return@register
-            val title = ChatUtils.stripColor(screen.title.string)
-            if (!ShardTracker.isFusionMenu(title)) return@register
-            menuHooks++
-            val kind = kindOf(title)
-            // Both go in the background: the tree behind the panel, and the lime squares on the panel but under the
-            // slots' items, hover highlight and tooltips, which are drawn later.
-            ScreenEvents.afterBackground(screen).register { _, graphics, _, _, _ ->
-                drawTree(screen, kind, graphics)
-                drawHighlights(screen, kind, graphics)
+            site {
+                val title = ChatUtils.stripColor(screen.title.string)
+                if (ShardTracker.isFusionMenu(title)) {
+                    menuHooks++
+                    val kind = kindOf(title)
+                    // Both go in the background: the tree behind the panel, and the lime squares on the panel but under the
+                    // slots' items, hover highlight and tooltips, which are drawn later.
+                    ScreenEvents.afterBackground(screen).register { _, graphics, _, _, _ ->
+                        site {
+                            drawTree(screen, kind, graphics)
+                            drawHighlights(screen, kind, graphics)
+                        }
+                    }
+                }
             }
         }
     }
@@ -224,11 +231,17 @@ object FusionTree : Feature {
         val bottom = top + screen.imageHeight
         val w = screen.width
         val h = screen.height
+        val contentRight = shown.x + (content.width * scale).toInt() + 2
+        val contentBottom = shown.y + (content.height * scale).toInt() + 2
         fun clipped(x0: Int, y0: Int, x1: Int, y1: Int) {
-            if (x1 <= x0 || y1 <= y0) return
+            // Nothing of the tree is in this strip: leave it out.
+            if (x1 <= x0 || y1 <= y0 || shown.x >= x1 || contentRight <= x0 || shown.y >= y1 || contentBottom <= y0) return
             graphics.enableScissor(x0, y0, x1, y1)
-            OverlayManager.draw(graphics, shown, content)
-            graphics.disableScissor()
+            try {
+                OverlayManager.draw(graphics, shown, content)
+            } finally {
+                graphics.disableScissor()
+            }
         }
         clipped(0, 0, w, top)
         clipped(0, bottom, w, h)

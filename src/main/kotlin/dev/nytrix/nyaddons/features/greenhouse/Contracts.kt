@@ -21,7 +21,6 @@ class GhMutation(
     val requiresWatering: Boolean,
     val analysisCoins: Long,
     val analysisCopper: Int,
-    val firstAnalysisCopper: Int,
 )
 
 /** Everything known about the Greenhouse, loaded on demand and freed when idle. */
@@ -72,24 +71,4 @@ object Greenhouse {
     var data: GhData = GreenhouseDataImpl
     var stock: GhStock = GreenhouseStockImpl
     var planner: GhPlanner = GreenhousePlannerImpl
-
-    private object EmptyData : GhData {
-        override val ready = false
-        override val crops = emptyList<GhCrop>()
-        override val mutations = emptyList<GhMutation>()
-        override fun mutation(id: String): GhMutation? = null
-        override fun nameOf(id: String) = id
-        override fun request() {}
-    }
-
-    private object EmptyStock : GhStock {
-        override fun count(itemName: String): Int? = null
-        override fun inSacks(itemName: String): Int? = null
-        override fun inInventory(itemName: String) = 0
-        override val sacksUpdatedAt = 0L
-    }
-
-    private object NoPlanner : GhPlanner {
-        override fun plan(target: GhMutation): GhLayout? = null
-    }
 }

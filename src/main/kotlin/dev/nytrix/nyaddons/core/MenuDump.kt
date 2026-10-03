@@ -18,12 +18,18 @@ object MenuDump {
     private const val KEY_F8 = 297
     private const val CHEST_COLUMNS = 9
 
+    private val site = Safe.site("Menu Dump")
+
     fun init() {
         ScreenEvents.AFTER_INIT.register { _, screen, _, _ ->
-            if (screen is AbstractContainerScreen<*>) {
-                ScreenKeyboardEvents.allowKeyPress(screen).register { _, key ->
-                    if (key.key() == KEY_F8) copy(screen)
-                    key.key() != KEY_F8
+            site {
+                if (screen is AbstractContainerScreen<*>) {
+                    ScreenKeyboardEvents.allowKeyPress(screen).register { _, key ->
+                        site.call(true) {
+                            if (key.key() == KEY_F8) copy(screen)
+                            key.key() != KEY_F8
+                        }
+                    }
                 }
             }
         }

@@ -6,6 +6,7 @@ import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.Downloads
+import dev.nytrix.nyaddons.core.Safe
 import net.minecraft.world.item.ItemStack
 import java.io.File
 
@@ -99,10 +100,10 @@ object ShardRepo {
     fun load(directory: File) {
         val shardsFile = File(directory, "attribute_shards.json")
         read(shardsFile)
-        Thread({
+        Safe.background("shard list") {
             if (Downloads.refresh(SHARDS_URL, shardsFile)) read(shardsFile)
             texturesFile = prepareTextures(directory)
-        }, "NyAddOns shard list").apply { isDaemon = true }.start()
+        }
     }
 
     private fun read(shardsFile: File) {

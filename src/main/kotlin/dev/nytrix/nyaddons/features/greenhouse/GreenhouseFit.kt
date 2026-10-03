@@ -1,5 +1,6 @@
 package dev.nytrix.nyaddons.features.greenhouse
 
+import dev.nytrix.nyaddons.core.Safe
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -34,20 +35,20 @@ class GreenhouseFit {
         val mine = ++generation
         val copy = mask.copyOf()
         val unlocked = GreenhousePlots.count(copy)
-        Thread({
+        Safe.background("greenhouse fit") {
             for (m in list) {
-                if (mine != generation) return@Thread
+                if (mine != generation) return@background
                 if (m.id in GreenhouseGoals.skippedMutations) continue
                 val result = try {
                     compute(m, copy, unlocked)
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     UNKNOWN
                 }
-                if (mine != generation) return@Thread
+                if (mine != generation) return@background
                 if (result != UNKNOWN) answers[m.id] = result
                 version++
             }
-        }, "NyAddOns greenhouse fit").apply { isDaemon = true }.start()
+        }
     }
 
     private fun compute(m: GhMutation, mask: BooleanArray, unlocked: Int): Int {

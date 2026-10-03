@@ -154,8 +154,8 @@ object GreenhouseStockImpl : GhStock {
     // Chat
 
     fun onChat(message: Component) {
-        // Cheap filter first: the plain text of nearly every chat line is rejected here.
-        if (!message.string.contains("[Sacks]") || !active()) return
+        // Cheap filters first: off the Garden nothing is looked at, and the plain text of nearly every chat line is rejected here.
+        if (!active() || !message.string.contains("[Sacks]")) return
         val hover = findHoverText(message, 0) ?: return
         val map = sacks
         var changed = false

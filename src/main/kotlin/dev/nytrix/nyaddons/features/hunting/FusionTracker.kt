@@ -3,6 +3,7 @@ package dev.nytrix.nyaddons.features.hunting
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.Downloads
 import dev.nytrix.nyaddons.core.NyEvents
+import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.features.Feature
 import dev.nytrix.nyaddons.gui.Overlay
 import dev.nytrix.nyaddons.gui.OverlayManager
@@ -30,13 +31,16 @@ object FusionRepo {
         loading = true
         val recipesFile = File(NyAddOns.directory, "fusion-data.json")
         val ratesFile = File(NyAddOns.directory, "fusion-rates.json")
-        Thread({
-            read(recipesFile, ratesFile)
-            val newRecipes = Downloads.refresh(BASE_URL + "fusion-data.json", recipesFile)
-            val newRates = Downloads.refresh(BASE_URL + "rates.json", ratesFile)
-            if (newRecipes || newRates || data == null) read(recipesFile, ratesFile)
-            synchronized(this) { loading = false }
-        }, "NyAddOns fusion data").apply { isDaemon = true }.start()
+        Safe.background("fusion data") {
+            try {
+                read(recipesFile, ratesFile)
+                val newRecipes = Downloads.refresh(BASE_URL + "fusion-data.json", recipesFile)
+                val newRates = Downloads.refresh(BASE_URL + "rates.json", ratesFile)
+                if (newRecipes || newRates || data == null) read(recipesFile, ratesFile)
+            } finally {
+                synchronized(this) { loading = false }
+            }
+        }
     }
 
     /** Drops the data to free its memory. [request] loads it again. */
@@ -49,7 +53,7 @@ object FusionRepo {
         if (!recipesFile.exists() || !ratesFile.exists()) return
         try {
             data = FusionData({ recipesFile.bufferedReader() }, ratesFile.readText())
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             NyAddOns.logger.error("Could not read the fusion data", e)
         }
     }
@@ -81,6 +85,7 @@ object FusionTracker : Feature {
     @Volatile
     private var pending = false
     private var lastRequest: Any? = null
+    private var idleSince = 0L
 
     // Solving is the slow part, so the solved calculator is reused until the settings change.
     @Volatile
@@ -145,6 +150,7 @@ object FusionTracker : Feature {
     }
 
     private const val EPSILON = 1e-9
+    private const val IDLE_RELEASE_MILLIS = 60_000L
 
     /** Works the trees out again now, so the counters follow a fusion as it happens. */
     fun requestRefresh() {
@@ -211,10 +217,23 @@ object FusionTracker : Feature {
             val needed = ShardTracker.neededToMax(shard) ?: (ShardRepo.totalToMax(shard) - owned)
             if (needed > 0) shard to needed else null
         }
-        // The recipe data is only loaded once something needs a tree.
-        if (wanted.isEmpty() && FusionRepo.data == null) {
-            targets = emptyList()
-            return
+        // The recipe data is only loaded once something needs a tree, and let go of again a minute after nothing does.
+        if (wanted.isEmpty()) {
+            if (FusionRepo.data == null) {
+                targets = emptyList()
+                return
+            }
+            val now = System.currentTimeMillis()
+            if (idleSince == 0L) idleSince = now
+            if (now - idleSince >= IDLE_RELEASE_MILLIS) {
+                idleSince = 0
+                targets = emptyList()
+                calculator = null
+                FusionRepo.release()
+                return
+            }
+        } else {
+            idleSince = 0
         }
         FusionRepo.request()
         val data = FusionRepo.data ?: return
@@ -235,7 +254,7 @@ object FusionTracker : Feature {
                 targets = wanted.mapNotNull { (shard, needed) ->
                     solved.third.plan(shard.code, needed.toDouble())?.let { Target(shard, needed, it) }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 NyAddOns.logger.error("Could not work out the fusion tree", e)
                 targets = emptyList()
             } finally {

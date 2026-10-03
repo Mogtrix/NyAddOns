@@ -7,6 +7,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /** One tree with honeycomb on it. Times are epoch milliseconds so they survive restarts. */
 class TrackedTree(
@@ -166,17 +167,28 @@ object Storage {
     fun saveIfDirty(wait: Boolean = false) {
         if (!dirty) return
         dirty = false
-        val json = gson.toJson(data)
+        val json = try {
+            gson.toJson(data)
+        } catch (t: Throwable) {
+            // Try again at the next save instead of losing the change.
+            dirty = true
+            throw t
+        }
         val write = writer.submit {
             try {
                 file.parentFile.mkdirs()
                 val temp = File(file.parentFile, file.name + ".tmp")
                 temp.writeText(json)
                 Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 NyAddOns.logger.error("Could not save ${file.name}", e)
             }
         }
-        if (wait) write.get()
+        // A stuck disk must not keep the game from closing.
+        if (wait) try {
+            write.get(10, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            NyAddOns.logger.error("Saving ${file.name} did not finish", e)
+        }
     }
 }
