@@ -20,6 +20,7 @@ enum class GreenhouseView(private val displayName: String) {
     UNIQUE_MUTATIONS("Unique Mutations"),
     ROSE_DRAGON("Rose Dragon"),
     ALL_MUTATIONS("All Mutations"),
+    PLANNER("Planner"),
     ;
 
     override fun toString() = displayName

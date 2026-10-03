@@ -21,7 +21,7 @@ import net.minecraft.client.input.KeyEvent
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext
 
-/** The Greenhouse window: three views, the dropdown, ticking a mutation, and the layout grid. */
+/** The Greenhouse window: four views, the dropdown, ticking a mutation, the layout grid and the Planner tab. */
 @Suppress("UnstableApiUsage")
 class GreenhouseScreenTest : FabricClientGameTest {
 
@@ -83,7 +83,8 @@ class GreenhouseScreenTest : FabricClientGameTest {
         val oldPlanner = Greenhouse.planner
         val oldView = NyAddOns.config.garden.greenhouse.view
         val oldAnalysed = context.computeOnClient<Set<String>, RuntimeException> { Storage.profile.greenhouse.analysed.toSet() }
-        val oldAmounts = context.computeOnClient<Map<String, Int>, RuntimeException> { Storage.profile.greenhouse.amounts.toMap() }
+        val oldAmounts = context.computeOnClient<Map<String, Int>, RuntimeException> { Storage.profile.greenhouse.planAmounts.toMap() }
+        val oldOne = context.computeOnClient<Boolean, RuntimeException> { Storage.profile.greenhouse.planOneOfEach }
         val oldPlots = context.computeOnClient<String, RuntimeException> { Storage.profile.greenhouse.plots }
         try {
             context.worldBuilder().create().use { run(context) }
@@ -94,7 +95,8 @@ class GreenhouseScreenTest : FabricClientGameTest {
                 Greenhouse.planner = oldPlanner
                 NyAddOns.config.garden.greenhouse.view = oldView
                 Storage.profile.greenhouse.analysed = oldAnalysed.toMutableSet()
-                Storage.profile.greenhouse.amounts = oldAmounts.toMutableMap()
+                Storage.profile.greenhouse.planAmounts = oldAmounts.toMutableMap()
+                Storage.profile.greenhouse.planOneOfEach = oldOne
                 Storage.profile.greenhouse.plots = oldPlots
             }
             context.setScreen { null }
@@ -115,7 +117,8 @@ class GreenhouseScreenTest : FabricClientGameTest {
             Greenhouse.planner = fakePlanner
             NyAddOns.config.garden.greenhouse.view = GreenhouseView.UNIQUE_MUTATIONS
             Storage.profile.greenhouse.analysed = mutableSetOf()
-            Storage.profile.greenhouse.amounts = mutableMapOf()
+            Storage.profile.greenhouse.planAmounts = mutableMapOf()
+            Storage.profile.greenhouse.planOneOfEach = false
             Storage.profile.greenhouse.plots = ""
         }
         context.onClient { NyAddOns.openScreen { GreenhouseScreen() } }
@@ -143,9 +146,8 @@ class GreenhouseScreenTest : FabricClientGameTest {
         context.waitTicks(3)
         context.takeScreenshot("gh-2-unique-ticked")
         checkHeader(context, "Mutations found 1/38")
-        uniqueAmounts(context)
-        context.takeScreenshot("gh-9-unique-amounts-854")
-        maxRun(context, "gh-19-max-854")
+        uniquePlain(context)
+        context.takeScreenshot("gh-9-unique-plain-854")
 
         // Dropdown: Rose Dragon.
         pickView(context, 1)
@@ -156,6 +158,7 @@ class GreenhouseScreenTest : FabricClientGameTest {
         noCosts(context)
         roseTree(context)
         plotsPicker(context)
+        plannerTab(context, "854", true)
 
         // Dropdown: All Mutations, select Glasscorn-ish row and plan.
         pickView(context, 2)
@@ -194,8 +197,7 @@ class GreenhouseScreenTest : FabricClientGameTest {
         context.waitTicks(3)
         context.takeScreenshot("gh-14-plots-1280")
         click(context) { it.donePlotsCenter().let { p -> p[0] to p[1] } }
-        pickView(context, 0)
-        maxRun(context, "gh-20-max-1280")
+        plannerTab(context, "1280", false)
 
         // The size people play in: a 1708x960 window at GUI scale 2 is an 854x480 GUI, which GUI scale 1 gives here.
         context.input.resizeWindow(854, 480)
@@ -216,8 +218,7 @@ class GreenhouseScreenTest : FabricClientGameTest {
         context.waitTicks(3)
         context.takeScreenshot("gh-24-plots-gui854")
         click(context) { it.donePlotsCenter().let { p -> p[0] to p[1] } }
-        pickView(context, 0)
-        maxRun(context, "gh-25-max-gui854")
+        plannerTab(context, "gui854", false)
         context.onClient { it.options.guiScale().set(0); it.resizeGui() }
         context.setScreen { null }
         context.input.resizeWindow(854, 480)
@@ -231,43 +232,184 @@ class GreenhouseScreenTest : FabricClientGameTest {
         }
     }
 
-    /** The Max button: working state, the amounts overwritten with the counts, the layout and the summary in the side panel. */
-    private fun maxRun(context: ClientGameTestContext, shot: String) {
-        // Give every mutation 7 first so the overwrite is visible, then Max.
-        click(context) { it.setAllCenter().let { p -> p[0] to p[1] } }
-        typeDigits(context, "7")
+    private fun planAmount(id: String) = Storage.profile.greenhouse.planAmounts[id] ?: 0
+
+    /** Unlocks [squares] squares (the middle first) through the Plots picker, or the default block when null. */
+    private fun setSquares(context: ClientGameTestContext, squares: Int?) {
+        click(context) { it.plotsButtonCenter().let { p -> p[0] to p[1] } }
+        if (squares == null) click(context) { it.defaultPlotsCenter().let { p -> p[0] to p[1] } }
+        else {
+            click(context) { it.fillBoxCenter().let { p -> p[0] to p[1] } }
+            typeDigits(context, squares.toString())
+            click(context) { it.fillButtonCenter().let { p -> p[0] to p[1] } }
+        }
+        click(context) { it.donePlotsCenter().let { p -> p[0] to p[1] } }
+    }
+
+    private fun setBox(context: ClientGameTestContext, row: Int, digits: String) {
+        click(context) { it.plannerBoxCenter(row).let { p -> p[0] to p[1] } }
+        typeDigits(context, digits)
         pressKey(context, 256)
-        click(context) { it.maxButtonCenter().let { p -> p[0] to p[1] } }
-        context.onClient { check(screenNow().maxPanelShown) { "the Max button did not open the Max panel" } }
+    }
+
+    /** Waits until the Planner has nothing running or pending (Max, or the layout of the typed amounts). */
+    private fun waitPlanner(context: ClientGameTestContext) {
         var waited = 0
-        while (context.computeOnClient<Boolean, RuntimeException> { screenNow().maxBusy } && waited < 200) {
+        while (context.computeOnClient<Boolean, RuntimeException> { screenNow().plannerBusy } && waited < 400) {
             context.waitTicks(2)
             waited += 2
         }
         context.waitTicks(3)
+        check(!context.computeOnClient<Boolean, RuntimeException> { screenNow().plannerBusy }) { "the Planner never finished" }
+    }
+
+    private fun clickMax(context: ClientGameTestContext) {
+        click(context) { it.maxButtonCenter().let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+    }
+
+    /** The plain Unique Mutations list: names, no amount boxes, no Max, the totals line, ticking still works. */
+    private fun uniquePlain(context: ClientGameTestContext) {
         context.onClient {
             val s = screenNow()
-            check(!s.maxBusy) { "Max never finished" }
-            check(s.maxSummaryText.startsWith("Max: ")) { "summary: '${s.maxSummaryText}'" }
-            val counts = s.maxPlaced
-            for (m in mutations) check(amount(m.id) == (counts[m.id] ?: 0)) { "${m.id}: amount ${amount(m.id)} but Max says ${counts[m.id]}" }
-            if (counts.isNotEmpty()) {
-                check(s.maxBlockIds.isNotEmpty() && s.iconsDrawn > 0) { "Max layout has no blocks or icons" }
-                check(s.maxSummaryText.contains("${counts.values.sum()} mutations (${counts.size} kind")) { "summary: '${s.maxSummaryText}'" }
-            }
-            check(s.maxText.contains("Max:")) { "side panel text: '${s.maxText}'" }
+            check(s.uniqueText()[0] == "Ashwreath") { "plain rows are just the name (and a note): ${s.uniqueText()}" }
+            check(s.uniqueText().none { row -> row.any { it.isDigit() } }) { "no amounts in the list: ${s.uniqueText()}" }
+            val totals = s.headerText()[2]
+            check(totals.startsWith("The rest need") && totals.contains("short") && totals.contains("Ashwreath")) { "totals line over the unanalysed ones: $totals" }
             val text = s.allVisibleText().lowercase()
-            check(!text.contains("coin") && !text.contains("copper")) { "cost text after Max: $text" }
-            NyAddOns.logger.info("[Greenhouse] test Max: ${s.maxSummaryText} counts=${s.maxPlaced} text=${s.maxText.replace('\n', '|')}")
+            check(!text.contains("set all")) { "the set-all box is gone from the list: $text" }
         }
-        context.takeScreenshot(shot)
-        // Boxes stay editable: type into the first row's box.
-        click(context) { it.amountBoxCenter(0).let { p -> p[0] to p[1] } }
-        typeDigits(context, "9")
-        context.onClient { check(amount("ashwreath") == 9) { "the first row box should take typing after Max: ${amount("ashwreath")}" } }
-        pressKey(context, 256)
-        context.onClient { Storage.profile.greenhouse.amounts = mutableMapOf() }
-        context.waitTicks(22)
+        // Old save files (with the removed per-row amounts) still load with defaults.
+        context.onClient {
+            val old = com.google.gson.Gson().fromJson("{\"analysed\":[\"a\"],\"amounts\":{\"x\":3}}", GreenhouseProfile::class.java)
+            check(old.planAmounts.isEmpty() && !old.planOneOfEach && old.plots.isEmpty() && "a" in old.analysed) { "old profile data did not load with defaults" }
+            check(GreenhousePlots.parse("").contentEquals(GreenhousePlots.default()) && GreenhousePlots.count(GreenhousePlots.default()) == 12)
+        }
+    }
+
+    /**
+     * The Planner tab: amount boxes, the shared layout, per-row max, the main Max with One of each on and off, amounts that do not
+     * fit, the crop list and persistence. [full] runs the checks, otherwise only the screenshots (other window sizes).
+     */
+    private fun plannerTab(context: ClientGameTestContext, tag: String, full: Boolean) {
+        pickView(context, 3)
+        context.onClient { check(NyAddOns.config.garden.greenhouse.view == GreenhouseView.PLANNER) { "view not remembered" } }
+        setSquares(context, 40)
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+        context.onClient {
+            val s = screenNow()
+            check(s.plannerRowText().size == 8 && s.plannerRowText().all { it.endsWith(" 0") || it.endsWith(" 0 found") }) { "planner rows start at 0: ${s.plannerRowText()}" }
+            check(s.plannerFits()) { "the Planner controls do not fit this window" }
+            check(s.headerFits()) { "header does not fit" }
+        }
+        context.takeScreenshot("gh-30-planner-empty-$tag")
+
+        // Typed amounts: Ashwreath (row 1) and Cheesebite (row 2).
+        setBox(context, 1, "3")
+        setBox(context, 2, "2")
+        waitPlanner(context)
+        context.takeScreenshot("gh-31-planner-typed-$tag")
+        if (full) context.onClient {
+            val s = screenNow()
+            check(planAmount("ashwreath") == 3 && planAmount("cheesebite") == 2) { "typed amounts: ${Storage.profile.greenhouse.planAmounts}" }
+            check(s.plannerPlaced == mapOf("ashwreath" to 3, "cheesebite" to 2) && s.plannerRounds == 0 && s.plannerUnplaced.isEmpty()) { "40 squares take 3+2: ${s.plannerPlaced} ${s.plannerUnplaced}" }
+            check(s.plannerBlockIds.isNotEmpty() && s.iconsDrawn > 0) { "the layout draws blocks and icons" }
+            val text = s.plannerText.replace('\n', ' ')
+            check(text.contains("Planned: 5 mutations (2 kinds) on 40 squares")) { "summary: $text" }
+            // Cheesebite: 4 Wheat + 1 Moonflower each, Ashwreath: 2 Nether Wart each. Wheat is held 640, Nether Wart 12.
+            check(text.contains("Crops needed") && text.contains("Wheat 640/8") && text.contains("Nether Wart 12/6") && text.contains("Moonflower ?/2")) { "crop list: $text" }
+            check(!text.lowercase().contains("coin") && !text.lowercase().contains("copper")) { "cost text: $text" }
+            check(s.plannerRowText()[1] == "Ashwreath 3 found" && s.plannerRowText()[2] == "Cheesebite 2") { "rows: ${s.plannerRowText()}" }
+        }
+
+        // One of each, Max over the selected rows only.
+        click(context) { it.oneOfEachCenter().let { p -> p[0] to p[1] } }
+        context.onClient { check(Storage.profile.greenhouse.planOneOfEach) { "One of each did not switch on" } }
+        clickMax(context)
+        if (full) context.onClient {
+            val s = screenNow()
+            val amounts = Storage.profile.greenhouse.planAmounts
+            check(amounts == mapOf("ashwreath" to 1, "cheesebite" to 1)) { "Max over the 2 selected rows with one of each: $amounts" }
+            check(s.plannerPlaced == amounts && s.plannerText.replace('\n', ' ').contains("Planned: 2 mutations (2 kinds)")) { "plan after Max: ${s.plannerPlaced} ${s.plannerText}" }
+        }
+        click(context) { it.oneOfEachCenter().let { p -> p[0] to p[1] } }
+        context.onClient { check(!Storage.profile.greenhouse.planOneOfEach) { "One of each did not switch off" } }
+        clickMax(context)
+        if (full) context.onClient {
+            val amounts = Storage.profile.greenhouse.planAmounts
+            check(setOf("ashwreath", "cheesebite").containsAll(amounts.keys) && amounts.values.sum() > 2) { "Max over the 2 selected rows without the cap: $amounts" }
+            check(screenNow().plannerPlaced == amounts) { "the Max layout is the plan: ${screenNow().plannerPlaced}" }
+        }
+        context.takeScreenshot("gh-32-planner-max-$tag")
+
+        // Main Max with nothing selected uses every row.
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        click(context) { it.oneOfEachCenter().let { p -> p[0] to p[1] } }
+        clickMax(context)
+        if (full) context.onClient {
+            val amounts = Storage.profile.greenhouse.planAmounts
+            check(amounts.size >= 3 && amounts.values.all { it == 1 }) { "Max over all rows, one of each: $amounts" }
+            check(screenNow().plannerPlaced == amounts)
+        }
+        context.takeScreenshot("gh-33-planner-max-one-$tag")
+        val kinds = context.computeOnClient<Int, RuntimeException> { Storage.profile.greenhouse.planAmounts.size }
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        click(context) { it.oneOfEachCenter().let { p -> p[0] to p[1] } }
+        clickMax(context)
+        if (full) context.onClient {
+            val amounts = Storage.profile.greenhouse.planAmounts
+            check(amounts.values.sum() >= kinds && amounts.values.any { it > 1 }) { "Max over all rows without the cap repeats kinds: $amounts" }
+        }
+
+        // Per-row max leaves the other rows alone.
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        setBox(context, 2, "1")
+        click(context) { it.plannerMaxCenter(1).let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+        if (full) context.onClient {
+            check(planAmount("ashwreath") > 1 && planAmount("cheesebite") == 1 && Storage.profile.greenhouse.planAmounts.size == 2) { "row max: ${Storage.profile.greenhouse.planAmounts}" }
+        }
+
+        // Amounts that do not fit: place what fits, explain the rest, estimate the rounds. Default 12 squares.
+        setSquares(context, null)
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        setBox(context, 1, "9")
+        setBox(context, 2, "9")
+        setBox(context, 4, "5")
+        setBox(context, 7, "3")
+        waitPlanner(context)
+        context.takeScreenshot("gh-34-planner-nofit-$tag")
+        if (full) context.onClient {
+            val s = screenNow()
+            check(s.plannerRounds >= 2 && s.plannerUnplaced.isNotEmpty()) { "rounds ${s.plannerRounds}, unplaced ${s.plannerUnplaced}" }
+            check(s.plannerPlaced.values.sum() in 1 until 26) { "12 squares cannot take 26 blocks: ${s.plannerPlaced}" }
+            val text = s.plannerText.replace('\n', ' ')
+            check(text.contains("rounds") && text.contains("Not placed") && text.contains("Planned:")) { "side text: $text" }
+            val mask = GreenhousePlots.current()
+            check(mask.count { it } == 12)
+            NyAddOns.logger.info("[Greenhouse] test Planner not fit: ${s.plannerPlaced} rounds=${s.plannerRounds} text=${text.replace('\n', '|')}")
+        }
+
+        if (full) {
+            // Persistence: closing and reopening the window keeps the amounts and the switch, and plans them again.
+            click(context) { it.oneOfEachCenter().let { p -> p[0] to p[1] } }
+            val saved = context.computeOnClient<Map<String, Int>, RuntimeException> { Storage.profile.greenhouse.planAmounts.toMap() }
+            check(saved == mapOf("ashwreath" to 9, "cheesebite" to 9, "devourer" to 5, "timestalk" to 3)) { "saved amounts: $saved" }
+            context.setScreen { null }
+            context.onClient { NyAddOns.openScreen { GreenhouseScreen() } }
+            context.waitForScreen(GreenhouseScreen::class.java)
+            waitPlanner(context)
+            context.onClient {
+                val s = screenNow()
+                check(s.view == GreenhouseView.PLANNER && s.plannerRowText()[1] == "Ashwreath 9 found" && s.plannerRowText()[7] == "Timestalk 3") { "reopened rows: ${s.plannerRowText()}" }
+                check(Storage.profile.greenhouse.planOneOfEach && s.plannerPlaced.isNotEmpty()) { "reopened plan: ${s.plannerPlaced}" }
+            }
+            click(context) { it.oneOfEachCenter().let { p -> p[0] to p[1] } }
+        }
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        context.onClient { Storage.profile.greenhouse.planOneOfEach = false }
+        pickView(context, 0)
     }
 
     private fun checkHeader(context: ClientGameTestContext, found: String) {
@@ -289,62 +431,6 @@ class GreenhouseScreenTest : FabricClientGameTest {
     private fun pressKey(context: ClientGameTestContext, key: Int) {
         context.onClient { screenNow().keyPressed(KeyEvent(key, 0, 0)) }
         context.waitTick()
-    }
-
-    private fun amount(id: String) = Storage.profile.greenhouse.amounts[id] ?: 1
-
-    /** Number boxes in the Unique Mutations view: typing, Backspace, the 4 digit limit, "set all", and the totals line. */
-    private fun uniqueAmounts(context: ClientGameTestContext) {
-        // Row 1 is Cheesebite (4 Wheat + 1 Moonflower each).
-        click(context) { it.amountBoxCenter(1).let { p -> p[0] to p[1] } }
-        typeDigits(context, "200")
-        context.onClient { check(amount("cheesebite") == 200) { "typed 200 but amount is ${amount("cheesebite")}" } }
-        pressKey(context, 259)
-        context.onClient { check(amount("cheesebite") == 20) { "Backspace should leave 20, got ${amount("cheesebite")}" } }
-        typeDigits(context, "2")
-        context.onClient { check(amount("cheesebite") == 202) }
-        typeDigits(context, "200")
-        context.onClient { check(amount("cheesebite") == 2022) { "four digits at most (202 + 2, the rest ignored): ${amount("cheesebite")}" } }
-        pressKey(context, 259)
-        pressKey(context, 259)
-        pressKey(context, 259)
-        typeDigits(context, "00")
-        context.onClient { check(amount("cheesebite") == 200) { "got ${amount("cheesebite")}" } }
-        context.waitTicks(3)
-        context.onClient {
-            val s = screenNow()
-            check(s.uniqueText()[1].contains("200")) { "row text ${s.uniqueText()[1]}" }
-            val totals = s.headerText()[2]
-            check(totals.contains("short") && totals.contains("Wheat")) { "800 Wheat needed but 640 held, totals line: $totals" }
-        }
-        // Escape leaves the box without closing the window.
-        pressKey(context, 256)
-        context.onClient { check(net.minecraft.client.Minecraft.getInstance().screen is GreenhouseScreen) }
-
-        click(context) { it.setAllCenter().let { p -> p[0] to p[1] } }
-        typeDigits(context, "0")
-        context.onClient {
-            check(screenNow().headerText()[2].startsWith("Nothing to make")) { "totals with every amount 0: ${screenNow().headerText()[2]}" }
-            check(Storage.profile.greenhouse.amounts.values.all { it == 0 })
-        }
-        typeDigits(context, "3")
-        context.onClient { check(amount("cheesebite") == 3 && amount("devourer") == 3) }
-        // Wheat: Cheesebite 4 + Glasscorn 3 + Devourer 2 + Timestalk 4 = 13 per set, x3 = 39 (Ashwreath is analysed and left out).
-        context.waitTicks(3)
-        context.takeScreenshot("gh-10-unique-all3-854")
-        typeDigits(context, "")
-        pressKey(context, 259)
-        typeDigits(context, "1")
-        context.onClient {
-            check(Storage.profile.greenhouse.amounts.isEmpty()) { "an amount of 1 is the default and is not stored: ${Storage.profile.greenhouse.amounts}" }
-        }
-        pressKey(context, 256)
-        // Old save files without the new fields still load with defaults.
-        context.onClient {
-            val old = com.google.gson.Gson().fromJson("{\"analysed\":[\"a\"]}", GreenhouseProfile::class.java)
-            check(old.amounts.isEmpty() && old.plots.isEmpty() && "a" in old.analysed) { "old profile data did not load with defaults" }
-            check(GreenhousePlots.parse("").contentEquals(GreenhousePlots.default()) && GreenhousePlots.count(GreenhousePlots.default()) == 12)
-        }
     }
 
     /** The Rose Dragon tree: expanding, counts, picking an item, the side panel and refreshed sack numbers. */

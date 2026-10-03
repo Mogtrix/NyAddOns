@@ -45,8 +45,11 @@ class GreenhouseProfile {
     var sacks = mutableMapOf<String, Int>()
     var sacksUpdatedAt = 0L
 
-    /** How many of each mutation to make (Unique Mutations view), by mutation id; a missing id means the default of 1. */
-    var amounts = mutableMapOf<String, Int>()
+    /** How many of each mutation the Planner view should make, by mutation id; a missing id means 0. */
+    var planAmounts = mutableMapOf<String, Int>()
+
+    /** The Planner's "One of each" switch: Max grows at most one of every kind. */
+    var planOneOfEach = false
 
     /** The unlocked Greenhouse squares: 100 characters, row-major, `1` unlocked and `0` locked. Empty means the default block. */
     var plots = ""

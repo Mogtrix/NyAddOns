@@ -4,6 +4,7 @@ import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.features.greenhouse.GhLayout
 import dev.nytrix.nyaddons.features.greenhouse.GhMax
 import dev.nytrix.nyaddons.features.greenhouse.GhMaxResult
+import dev.nytrix.nyaddons.features.greenhouse.GhPlaceResult
 import dev.nytrix.nyaddons.features.greenhouse.GreenhouseGoals
 import dev.nytrix.nyaddons.features.greenhouse.GreenhousePlots
 import dev.nytrix.nyaddons.features.greenhouse.PlannerCore
@@ -76,6 +77,50 @@ class GreenhouseMaxTest : FabricClientGameTest {
         }
         check(tieDone) { "no pair found for the tie-break test" }
         NyAddOns.logger.info("[Greenhouse] max summary:\n$summary")
+
+        // One of each: never more than one block of a kind, never more kinds than without, still a valid layout.
+        val many = GhMax.solve(core, data, all, null, emptySet(), 200)
+        val one = GhMax.solve(core, data, all, null, emptySet(), 200, oneOfEach = true)
+        validate(core, one, null, all, "one of each")
+        check(one.counts.values.all { it == 1 } && one.total == one.counts.size) { "one of each gave ${one.counts}" }
+        check(one.total >= 1 && one.total <= many.total) { "one of each ${one.total} vs ${many.total}" }
+        check(many.counts.values.any { it > 1 } || many.total == one.total) { "without the cap some kind should repeat: ${many.counts}" }
+        val oneTiny = GhMax.solve(core, data, all, GreenhousePlots.fill(12), emptySet(), 100, oneOfEach = true)
+        check(oneTiny.counts.values.all { it == 1 }) { "one of each in 12 squares: ${oneTiny.counts}" }
+        NyAddOns.logger.info("[Greenhouse] max one of each: ${one.total} kinds vs ${many.total} mutations without the cap")
+
+        // place: asked amounts into one shared layout.
+        val easy = all.filter { GhMax.solve(core, data, listOf(it), null, emptySet(), 20).total >= 1 }.take(3)
+        check(easy.size == 3) { "need three placeable mutations: $easy" }
+        val ask = mapOf(easy[0] to 2, easy[1] to 1, easy[2] to 1)
+        val fit = GhMax.place(core, data, ask, null)
+        validatePlace(core, fit, null, "place all")
+        check(fit.placed == ask && fit.unplaced.isEmpty() && fit.rounds == 0) { "everything should fit in 100 squares: ${fit.placed} ${fit.unplaced}" }
+        val empty = GhMax.place(core, data, mapOf(easy[0] to 0), null)
+        check(empty.layout == null && empty.requestedTotal == 0 && empty.rounds == 0 && empty.unplaced.isEmpty()) { "nothing asked, nothing placed" }
+        val tight = GreenhousePlots.fill(12)
+        val big = all.associateWith { 6 }
+        val part = GhMax.place(core, data, big, tight)
+        validatePlace(core, part, tight, "place too many")
+        check(part.placedTotal in 1 until part.requestedTotal) { "12 squares cannot take 6 of everything: ${part.placedTotal}/${part.requestedTotal}" }
+        check(part.rounds >= 2 && part.unplaced.isNotEmpty()) { "rounds ${part.rounds}, unplaced ${part.unplaced.size}" }
+        check(part.unplaced.keys.all { (part.placed[it] ?: 0) < big.getValue(it) && part.unplaced.getValue(it).isNotBlank() }) { "unplaced ids must be short of their amount" }
+        val locked = GhMax.place(core, data, ask, BooleanArray(100))
+        check(locked.layout == null && locked.placedTotal == 0 && locked.unplaced.keys == ask.keys) { "locked grid places nothing" }
+        val bad = GhMax.place(core, data, mapOf("shellfruit" to 1, "nope" to 1), null)
+        check(bad.placedTotal == 0 && bad.unplaced.size == 2) { "skipped and unknown ids are explained: ${bad.unplaced}" }
+        check(GhMax.place(null, data, ask, null).placedTotal == 0) { "null planner places nothing" }
+        NyAddOns.logger.info("[Greenhouse] place 12 squares x6 each: ${part.placedTotal}/${part.requestedTotal}, rounds ${part.rounds}, unplaced ${part.unplaced.size}, cells ${part.totalCells}")
+    }
+
+    private fun validatePlace(core: PlannerCore, res: GhPlaceResult, mask: BooleanArray?, what: String) {
+        val layout = res.layout ?: run { check(res.placedTotal == 0) { "$what: counts without a layout" }; return }
+        if (mask != null) for (r in 0 until 10) for (c in 0 until 10) check(layout.cells[r][c] == null || mask[r * 10 + c]) { "$what: uses locked square $r,$c" }
+        val census = core.census(layout) ?: throw AssertionError("$what: layout malformed")
+        for ((id, n) in res.placed) {
+            check(n <= res.requested.getValue(id)) { "$what: $id placed $n of ${res.requested[id]}" }
+            check((census.satisfied[id] ?: 0) >= n) { "$what: $id placed $n but only ${census.satisfied[id]} spawn" }
+        }
     }
 
     private fun validate(core: PlannerCore, res: GhMaxResult, mask: BooleanArray?, cands: List<String>, what: String) {
