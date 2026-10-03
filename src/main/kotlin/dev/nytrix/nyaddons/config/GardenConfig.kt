@@ -3,6 +3,7 @@ package dev.nytrix.nyaddons.config
 import com.google.gson.annotations.Expose
 import io.github.notenoughupdates.moulconfig.annotations.Accordion
 import io.github.notenoughupdates.moulconfig.annotations.ConfigEditorBoolean
+import io.github.notenoughupdates.moulconfig.annotations.ConfigEditorDropdown
 import io.github.notenoughupdates.moulconfig.annotations.ConfigEditorKeybind
 import io.github.notenoughupdates.moulconfig.annotations.ConfigOption
 
@@ -21,6 +22,15 @@ enum class GreenhouseView(private val displayName: String) {
     ROSE_DRAGON("Rose Dragon"),
     ALL_MUTATIONS("All Mutations"),
     PLANNER("Planner"),
+    ;
+
+    override fun toString() = displayName
+}
+
+/** Where the pinned Greenhouse plot is allowed to show. */
+enum class PinArea(private val displayName: String) {
+    GARDEN("Garden only"),
+    ALL_ISLANDS("All islands"),
     ;
 
     override fun toString() = displayName
@@ -50,4 +60,20 @@ class GreenhouseConfig {
     @Expose
     @JvmField
     var view = GreenhouseView.UNIQUE_MUTATIONS
+
+    @Expose
+    @ConfigOption(name = "Pinned Plot", desc = "Show the plot you pinned with §ePin to screen§7 in the Greenhouse window. Move it with §e/ny gui§7.")
+    @ConfigEditorBoolean
+    @JvmField
+    var pinnedEnabled = true
+
+    @Expose
+    @ConfigOption(name = "Pinned Plot Shows On", desc = "Where the pinned plot is shown.")
+    @ConfigEditorDropdown
+    @JvmField
+    var pinnedArea = PinArea.GARDEN
+
+    @Expose
+    @JvmField
+    var pinnedPosition = Position(250, 24, 1f)
 }

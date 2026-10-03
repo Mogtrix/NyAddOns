@@ -11,6 +11,9 @@ import dev.nytrix.nyaddons.features.greenhouse.GhPlanner
 import dev.nytrix.nyaddons.features.greenhouse.GhRequirement
 import dev.nytrix.nyaddons.features.greenhouse.GreenhousePlots
 import dev.nytrix.nyaddons.core.GreenhouseProfile
+import dev.nytrix.nyaddons.core.PinnedPlot
+import dev.nytrix.nyaddons.features.greenhouse.GreenhousePin
+import dev.nytrix.nyaddons.gui.OverlayManager
 import dev.nytrix.nyaddons.features.greenhouse.GreenhouseTree
 import dev.nytrix.nyaddons.features.greenhouse.GhStock
 import dev.nytrix.nyaddons.features.greenhouse.Greenhouse
@@ -86,6 +89,9 @@ class GreenhouseScreenTest : FabricClientGameTest {
         val oldAmounts = context.computeOnClient<Map<String, Int>, RuntimeException> { Storage.profile.greenhouse.planAmounts.toMap() }
         val oldOne = context.computeOnClient<Boolean, RuntimeException> { Storage.profile.greenhouse.planOneOfEach }
         val oldPlots = context.computeOnClient<String, RuntimeException> { Storage.profile.greenhouse.plots }
+        val oldBlocked = context.computeOnClient<String, RuntimeException> { Storage.profile.greenhouse.blocked }
+        val oldPin = context.computeOnClient<PinnedPlot?, RuntimeException> { Storage.profile.greenhouse.pin }
+        System.setProperty("nyaddons.devArea", "Garden")
         try {
             context.worldBuilder().create().use { run(context) }
         } finally {
@@ -98,7 +104,11 @@ class GreenhouseScreenTest : FabricClientGameTest {
                 Storage.profile.greenhouse.planAmounts = oldAmounts.toMutableMap()
                 Storage.profile.greenhouse.planOneOfEach = oldOne
                 Storage.profile.greenhouse.plots = oldPlots
+                Storage.profile.greenhouse.blocked = oldBlocked
+                Storage.profile.greenhouse.pin = oldPin
+                OverlayManager.invalidate()
             }
+            System.clearProperty("nyaddons.devArea")
             context.setScreen { null }
             context.input.resizeWindow(854, 480)
         }
@@ -120,6 +130,8 @@ class GreenhouseScreenTest : FabricClientGameTest {
             Storage.profile.greenhouse.planAmounts = mutableMapOf()
             Storage.profile.greenhouse.planOneOfEach = false
             Storage.profile.greenhouse.plots = ""
+            Storage.profile.greenhouse.blocked = ""
+            Storage.profile.greenhouse.pin = null
         }
         context.onClient { NyAddOns.openScreen { GreenhouseScreen() } }
         context.waitForScreen(GreenhouseScreen::class.java)
@@ -193,6 +205,7 @@ class GreenhouseScreenTest : FabricClientGameTest {
         click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
         context.waitTicks(15)
         context.takeScreenshot("gh-13-rose-panel-1280")
+        rosePin(context, "1280", true)
         click(context) { it.plotsButtonCenter().let { p -> p[0] to p[1] } }
         context.waitTicks(3)
         context.takeScreenshot("gh-14-plots-1280")
@@ -209,6 +222,7 @@ class GreenhouseScreenTest : FabricClientGameTest {
         click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
         context.waitTicks(15)
         context.takeScreenshot("gh-22-rose-panel-gui854")
+        rosePin(context, "gui854", true)
         pickView(context, 2)
         click(context) { it.allRowCenter(3).let { p -> p[0] to p[1] } }
         click(context) { it.planButtonCenter().let { p -> p[0] to p[1] } }
@@ -282,8 +296,16 @@ class GreenhouseScreenTest : FabricClientGameTest {
         // Old save files (with the removed per-row amounts) still load with defaults.
         context.onClient {
             val old = com.google.gson.Gson().fromJson("{\"analysed\":[\"a\"],\"amounts\":{\"x\":3}}", GreenhouseProfile::class.java)
-            check(old.planAmounts.isEmpty() && !old.planOneOfEach && old.plots.isEmpty() && "a" in old.analysed) { "old profile data did not load with defaults" }
+            check(old.planAmounts.isEmpty() && !old.planOneOfEach && old.plots.isEmpty() && old.blocked.isEmpty() && old.pin == null && "a" in old.analysed) { "old profile data did not load with defaults" }
             check(GreenhousePlots.parse("").contentEquals(GreenhousePlots.default()) && GreenhousePlots.count(GreenhousePlots.default()) == 12)
+            // The default is the centre blob: rows 3-6 with 2, 4, 4, 2 squares, symmetric about the middle of the 10x10.
+            val d = GreenhousePlots.default()
+            for (r in 0 until 10) for (c in 0 until 10) {
+                check(d[r * 10 + c] == d[(9 - r) * 10 + c] && d[r * 10 + c] == d[r * 10 + 9 - c]) { "the default is not centre-symmetric at $r,$c" }
+                val want = r in 3..6 && (if (r == 3 || r == 6) c in 4..5 else c in 3..6)
+                check(d[r * 10 + c] == want) { "default shape differs at $r,$c" }
+            }
+            check(GreenhousePlots.parseBlocked("").none { it } && GreenhousePlots.parseBlocked("1").none { it })
         }
     }
 
@@ -304,6 +326,23 @@ class GreenhouseScreenTest : FabricClientGameTest {
             check(s.headerFits()) { "header does not fit" }
         }
         context.takeScreenshot("gh-30-planner-empty-$tag")
+        if (full) {
+            // The - and + buttons: step by one, never below 0 or above 9999.
+            click(context) { it.plannerPlusCenter(3).let { p -> p[0] to p[1] } }
+            click(context) { it.plannerPlusCenter(3).let { p -> p[0] to p[1] } }
+            check(planAmount("chocoberry") == 2) { "two + presses: ${planAmount("chocoberry")}" }
+            click(context) { it.plannerMinusCenter(3).let { p -> p[0] to p[1] } }
+            check(planAmount("chocoberry") == 1) { "one - press: ${planAmount("chocoberry")}" }
+            click(context) { it.plannerMinusCenter(3).let { p -> p[0] to p[1] } }
+            click(context) { it.plannerMinusCenter(3).let { p -> p[0] to p[1] } }
+            check(planAmount("chocoberry") == 0 && "chocoberry" !in Storage.profile.greenhouse.planAmounts) { "- stops at 0: ${Storage.profile.greenhouse.planAmounts}" }
+            setBox(context, 3, "9998")
+            click(context) { it.plannerPlusCenter(3).let { p -> p[0] to p[1] } }
+            click(context) { it.plannerPlusCenter(3).let { p -> p[0] to p[1] } }
+            check(planAmount("chocoberry") == 9999) { "+ stops at 9999: ${planAmount("chocoberry")}" }
+            click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+            waitPlanner(context)
+        }
 
         // Typed amounts: Ashwreath (row 1) and Cheesebite (row 2).
         setBox(context, 1, "3")
@@ -371,6 +410,31 @@ class GreenhouseScreenTest : FabricClientGameTest {
             check(planAmount("ashwreath") > 1 && planAmount("cheesebite") == 1 && Storage.profile.greenhouse.planAmounts.size == 2) { "row max: ${Storage.profile.greenhouse.planAmounts}" }
         }
 
+        // Per-row max counts the other rows: 3 Cheesebite typed, max on Ashwreath.
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        click(context) { it.plannerMaxCenter(1).let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+        val alone = context.computeOnClient<Int, RuntimeException> { planAmount("ashwreath") }
+        context.takeScreenshot("gh-35-planner-max-alone-$tag")
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        setBox(context, 2, "3")
+        setBox(context, 1, "50")
+        waitPlanner(context)
+        context.takeScreenshot("gh-36-planner-before-alongside-$tag")
+        click(context) { it.plannerMaxCenter(1).let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+        context.takeScreenshot("gh-37-planner-max-alongside-$tag")
+        if (full) context.onClient {
+            val amounts = Storage.profile.greenhouse.planAmounts
+            val s = screenNow()
+            check(amounts["cheesebite"] == 3 && amounts.size == 2) { "the other rows stay as typed: $amounts" }
+            val mine = amounts["ashwreath"] ?: 0
+            check(mine in 1..alone) { "Ashwreath alongside 3 Cheesebite is between 1 and the solo max $alone: $mine" }
+            check(s.plannerPlaced == amounts && s.plannerUnplaced.isEmpty() && s.plannerRounds == 0) { "the plan holds the others and the row: ${s.plannerPlaced} ${s.plannerUnplaced}" }
+            NyAddOns.logger.info("[Greenhouse] test row max: Ashwreath $mine alongside 3 Cheesebite, $alone alone")
+        }
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+
         // Amounts that do not fit: place what fits, explain the rest, estimate the rounds. Default 12 squares.
         setSquares(context, null)
         click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
@@ -390,6 +454,18 @@ class GreenhouseScreenTest : FabricClientGameTest {
             check(mask.count { it } == 12)
             NyAddOns.logger.info("[Greenhouse] test Planner not fit: ${s.plannerPlaced} rounds=${s.plannerRounds} text=${text.replace('\n', '|')}")
         }
+        if (full) {
+            // Max on a row while the other rows already do not fit: the row gets 0 and the panel says so.
+            click(context) { it.plannerMaxCenter(1).let { p -> p[0] to p[1] } }
+            waitPlanner(context)
+            context.onClient {
+                check(planAmount("ashwreath") == 0 && planAmount("cheesebite") == 9 && planAmount("timestalk") == 3) { "max with crowded rows: ${Storage.profile.greenhouse.planAmounts}" }
+                val note = screenNow().plannerText.replace('\n', ' ')
+                check(note.contains("other rows already do not fit")) { "side text: $note" }
+            }
+            setBox(context, 1, "9")
+            waitPlanner(context)
+        }
 
         if (full) {
             // Persistence: closing and reopening the window keeps the amounts and the switch, and plans them again.
@@ -407,9 +483,124 @@ class GreenhouseScreenTest : FabricClientGameTest {
             }
             click(context) { it.oneOfEachCenter().let { p -> p[0] to p[1] } }
         }
+        blockedAndPin(context, tag, full)
         click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
         context.onClient { Storage.profile.greenhouse.planOneOfEach = false }
         pickView(context, 0)
+    }
+
+    private fun overlayNow() = OverlayManager.overlays.first { it.label == "Pinned Plot" }.also { OverlayManager.invalidate() }.current()
+
+    /** Closes the window, takes [name] with the pinned plot on the HUD and opens the window again. */
+    private fun hudShot(context: ClientGameTestContext, name: String) {
+        context.setScreen { null }
+        context.onClient { OverlayManager.invalidate() }
+        context.waitTicks(4)
+        context.takeScreenshot(name)
+        context.onClient { NyAddOns.openScreen { GreenhouseScreen() } }
+        context.waitForScreen(GreenhouseScreen::class.java)
+        context.waitTicks(3)
+    }
+
+    /** Blocked squares in the Plots picker, then pinning the Planner's layout to the screen. 40 squares, 3 Ashwreath and 2 Cheesebite. */
+    private fun blockedAndPin(context: ClientGameTestContext, tag: String, full: Boolean) {
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        setSquares(context, 40)
+        setBox(context, 1, "3")
+        setBox(context, 2, "2")
+        waitPlanner(context)
+        if (full) context.onClient {
+            check(screenNow().plannerText.replace('\n', ' ').contains("on 40 squares")) { "before blocking: ${screenNow().plannerText}" }
+            check(overlayNow() == null) { "nothing pinned yet, nothing on the HUD" }
+        }
+
+        // Block the four middle squares: they stay unlocked but no layout may use them.
+        click(context) { it.plotsButtonCenter().let { p -> p[0] to p[1] } }
+        click(context) { it.blockModeCenter().let { p -> p[0] to p[1] } }
+        click(context) { it.plotCellCenter(4, 4).let { p -> p[0] to p[1] } }
+        if (full) context.onClient {
+            check(screenNow().blockModeOn && screenNow().blockedSquares == 1 && Storage.profile.greenhouse.blocked[44] == '1') { "block one: ${screenNow().blockedSquares}" }
+        }
+        click(context) { it.plotCellCenter(4, 4).let { p -> p[0] to p[1] } }
+        if (full) context.onClient { check(screenNow().blockedSquares == 0 && Storage.profile.greenhouse.blocked.isEmpty()) { "click again unblocks: '${Storage.profile.greenhouse.blocked}'" } }
+        for ((r, c) in listOf(4 to 4, 4 to 5, 5 to 4, 5 to 5, 0 to 0)) click(context) { it.plotCellCenter(r, c).let { p -> p[0] to p[1] } }
+        context.waitTicks(2)
+        context.takeScreenshot("gh-40-plots-blocked-$tag")
+        if (full) context.onClient {
+            val s = screenNow()
+            check(s.blockedSquares == 4 && s.unlockedSquares == 40) { "4 blocked of 40 unlocked (a locked square cannot be blocked): ${s.blockedSquares}/${s.unlockedSquares}" }
+            check(Storage.profile.greenhouse.plots.count { it == '1' } == 40 && Storage.profile.greenhouse.blocked.count { it == '1' } == 4)
+        }
+        click(context) { it.blockModeCenter().let { p -> p[0] to p[1] } }
+        click(context) { it.donePlotsCenter().let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+        context.takeScreenshot("gh-41-planner-blocked-$tag")
+        if (full) context.onClient {
+            val s = screenNow()
+            val layout = s.plannerLayout ?: throw AssertionError("no layout with 36 usable squares")
+            for (i in listOf(44, 45, 54, 55)) check(layout.cells[i / 10][i % 10] == null) { "blocked square $i is used" }
+            check(s.plannerText.replace('\n', ' ').contains("on 36 squares") && s.plannerPlaced == mapOf("ashwreath" to 3, "cheesebite" to 2)) { "blocked plan: ${s.plannerText} ${s.plannerPlaced}" }
+        }
+
+        // Pin to screen.
+        context.onClient {
+            if (full) check(!screenNow().plannerIsPinned)
+        }
+        click(context) { it.pinPlannerCenter().let { p -> p[0] to p[1] } }
+        if (full) context.onClient {
+            val pin = Storage.profile.greenhouse.pin ?: throw AssertionError("Pin to screen saved nothing")
+            check(pin.title == "Planned layout" && pin.summary.replace(Regex("§."), "").contains("Planned: 5 mutations (2 kinds) on 36 squares") && "ashwreath" in pin.palette) { "pin: ${pin.title} / ${pin.summary} / ${pin.palette}" }
+            check(listOf(44, 45, 54, 55).all { pin.idAt(it) == null } && pin.cells.length == 100) { "pinned cells ${pin.cells}" }
+            check(screenNow().plannerIsPinned && overlayNow() != null && overlayNow()!!.let { it.width > 40 && it.height > 40 }) { "the pin shows on the HUD" }
+            // Saved with the profile: survives a restart.
+            val again = com.google.gson.Gson().fromJson(com.google.gson.Gson().toJson(Storage.profile.greenhouse), GreenhouseProfile::class.java)
+            check(again.pin!!.sameAs(pin) && again.blocked == Storage.profile.greenhouse.blocked) { "pin and blocked squares did not survive saving" }
+        }
+        hudShot(context, "gh-42-pinned-hud-$tag")
+        context.waitTicks(25)
+        waitPlanner(context)
+        if (full) {
+            context.onClient { check(screenNow().plannerIsPinned && overlayNow() != null) { "still pinned after reopening" } }
+            // Options: off, or only on the Garden.
+            val config = NyAddOns.config.garden.greenhouse
+            context.onClient { config.pinnedEnabled = false }
+            check(context.computeOnClient<Boolean, RuntimeException> { overlayNow() == null }) { "turned off in the config" }
+            context.onClient { config.pinnedEnabled = true; System.setProperty("nyaddons.devArea", "Hub") }
+            context.waitTicks(25)
+            check(context.computeOnClient<Boolean, RuntimeException> { overlayNow() == null }) { "Garden only: nothing on the Hub" }
+            context.onClient { config.pinnedArea = dev.nytrix.nyaddons.config.PinArea.ALL_ISLANDS }
+            check(context.computeOnClient<Boolean, RuntimeException> { overlayNow() != null }) { "All islands: shown on the Hub" }
+            context.onClient { config.pinnedArea = dev.nytrix.nyaddons.config.PinArea.GARDEN; System.setProperty("nyaddons.devArea", "Garden") }
+            context.waitTicks(25)
+            check(context.computeOnClient<Boolean, RuntimeException> { overlayNow() != null }) { "shown on the Garden" }
+        }
+        click(context) { it.pinPlannerCenter().let { p -> p[0] to p[1] } }
+        if (full) context.onClient { check(Storage.profile.greenhouse.pin == null && !screenNow().plannerIsPinned && overlayNow() == null) { "Unpin removes the pin" } }
+
+        // Unblock everything again.
+        click(context) { it.plotsButtonCenter().let { p -> p[0] to p[1] } }
+        click(context) { it.unblockAllCenter().let { p -> p[0] to p[1] } }
+        click(context) { it.donePlotsCenter().let { p -> p[0] to p[1] } }
+        if (full) context.onClient { check(screenNow().blockedSquares == 0 && Storage.profile.greenhouse.blocked.isEmpty()) { "Unblock all" } }
+    }
+
+    /** Pins what the Rose Dragon panel shows. [hud] also looks at the HUD (which closes the window and loses the tree's selection). */
+    private fun rosePin(context: ClientGameTestContext, tag: String, hud: Boolean) {
+        context.onClient { check(!screenNow().roseIsPinned) }
+        click(context) { it.pinRoseCenter().let { p -> p[0] to p[1] } }
+        context.onClient {
+            val pin = Storage.profile.greenhouse.pin ?: throw AssertionError("Pin to screen on the Rose Dragon panel saved nothing")
+            check(pin.title.startsWith("Glasscorn") || pin.title.startsWith("Ashwreath")) { "pin title ${pin.title}" }
+            check(pin.summary.contains("round") && pin.palette.isNotEmpty() && screenNow().roseIsPinned) { "pin: ${pin.summary}" }
+            check(overlayNow() != null)
+        }
+        if (hud) {
+            hudShot(context, "gh-43-pinned-hud-rose-$tag")
+            context.onClient { GreenhousePin.unpin() }
+        } else {
+            click(context) { it.pinRoseCenter().let { p -> p[0] to p[1] } }
+            context.onClient { check(Storage.profile.greenhouse.pin == null && overlayNow() == null) { "Unpin on the Rose Dragon panel" } }
+        }
     }
 
     private fun checkHeader(context: ClientGameTestContext, found: String) {
@@ -469,6 +660,7 @@ class GreenhouseScreenTest : FabricClientGameTest {
         context.waitTicks(2)
         context.onClient { check(screenNow().iconsDrawn >= 8) { "the plot grid and legend should draw icons: ${screenNow().iconsDrawn}" } }
         context.takeScreenshot("gh-12-rose-panel-854")
+        rosePin(context, "854", false)
         click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
         context.waitTicks(15)
         context.onClient {

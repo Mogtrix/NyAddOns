@@ -22,6 +22,7 @@ object GreenhouseFeature : Feature {
             if (config.enabled && SkyBlockData.area == "Garden") Greenhouse.data.request()
         }
         ClientTickEvents.END_CLIENT_TICK.register { mc -> pollKey(mc) }
+        GreenhousePin.register()
     }
 
     override fun commands(): List<Command> = if (config.shortCommand) listOf(command("gh")) else emptyList()

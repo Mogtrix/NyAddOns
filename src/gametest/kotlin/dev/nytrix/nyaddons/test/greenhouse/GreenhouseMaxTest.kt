@@ -42,7 +42,7 @@ class GreenhouseMaxTest : FabricClientGameTest {
         check(totals[12]!! >= 1, "12 squares should hold at least one mutation")
         check(totals[12]!! <= totals[30]!! && totals[30]!! <= totals[60]!! && totals[60]!! <= totals[100]!!) { "not monotonic: $totals" }
 
-        // default shape (2x6) and all-unlocked (null mask)
+        // default shape (the 12 square centre blob) and all-unlocked (null mask)
         val dflt = GhMax.solve(core, data, all, GreenhousePlots.default(), emptySet(), 200)
         validate(core, dflt, GreenhousePlots.default(), all, "default")
         val nullMask = GhMax.solve(core, data, all, null, emptySet(), 200)
@@ -110,7 +110,55 @@ class GreenhouseMaxTest : FabricClientGameTest {
         val bad = GhMax.place(core, data, mapOf("shellfruit" to 1, "nope" to 1), null)
         check(bad.placedTotal == 0 && bad.unplaced.size == 2) { "skipped and unknown ids are explained: ${bad.unplaced}" }
         check(GhMax.place(null, data, ask, null).placedTotal == 0) { "null planner places nothing" }
+        alongside(core, data, easy, all)
         NyAddOns.logger.info("[Greenhouse] place 12 squares x6 each: ${part.placedTotal}/${part.requestedTotal}, rounds ${part.rounds}, unplaced ${part.unplaced.size}, cells ${part.totalCells}")
+    }
+
+    /** Per-row max: the most of one mutation that fits together with the other rows' amounts. */
+    private fun alongside(core: PlannerCore, data: GreenhousePlannerTest.TestData, easy: List<String>, all: List<String>) {
+        val (a, b, c) = easy
+        val mask = GreenhousePlots.fill(40)
+        val none = GhMax.maxAlongside(core, data, emptyMap(), c, mask)
+        val solo = GhMax.solve(core, data, listOf(c), mask, emptySet(), GhMax.ALONGSIDE_BUDGET_MILLIS)
+        check(none.placed == mapOf(c to solo.counts.getValue(c)) && none.unplaced.isEmpty()) { "nothing else typed must equal the solo max: ${none.placed} vs ${solo.counts}" }
+        validatePlace(core, none, mask, "alongside empty")
+        // Its own previous amount is ignored.
+        val own = GhMax.maxAlongside(core, data, mapOf(c to 3), c, mask)
+        check(own.placed == none.placed) { "the row's own amount must be ignored: ${own.placed} vs ${none.placed}" }
+
+        var last = none.placed.getValue(c)
+        val stages = listOf(mapOf(a to 1), mapOf(a to 3), mapOf(a to 3, b to 4))
+        val log = StringBuilder("$last")
+        for (others in stages) {
+            val res = GhMax.maxAlongside(core, data, others, c, mask)
+            validatePlace(core, res, mask, "alongside $others")
+            val n = res.placed[c] ?: 0
+            check(others.all { (id, k) -> res.placed[id] == k }) { "the other rows must be placed in full: ${res.placed} for $others" }
+            check(n <= last) { "adding other amounts must not raise the max of $c: $n after $last with $others" }
+            check(res.layout == null || res.requested == res.placed) { "a fitting plan asks only for what it places" }
+            last = n
+            log.append(" -> $n")
+        }
+        NyAddOns.logger.info("[Greenhouse] max alongside of $c in 40 squares as the others grow: $log")
+
+        // Others that cannot fit: the row gets 0 and the note says why.
+        val tight = GreenhousePlots.fill(12)
+        val crowded = GhMax.maxAlongside(core, data, mapOf(a to 40, b to 40), c, tight)
+        check(crowded.placed[c] == null && crowded.note.contains("do not fit") && crowded.unplaced.isNotEmpty()) { "crowded: ${crowded.note} ${crowded.unplaced}" }
+        validatePlace(core, crowded, tight, "alongside crowded")
+        val skipped = GhMax.maxAlongside(core, data, mapOf(a to 1), "shellfruit", null)
+        check(skipped.placed["shellfruit"] == null && skipped.note.isNotEmpty()) { "skipped mutation: ${skipped.note}" }
+        check(GhMax.maxAlongside(null, data, mapOf(a to 1), c, null).placedTotal == 0) { "null planner places nothing" }
+
+        // A blocked square is never used: planner mask = unlocked and not blocked.
+        val blocked = BooleanArray(100).also { it[44] = true; it[45] = true; it[54] = true; it[55] = true }
+        val usable = GreenhousePlots.usable(mask, blocked)
+        check(GreenhousePlots.count(usable) == 36 && !usable[44] && usable[43]) { "usable = unlocked and not blocked" }
+        val around = GhMax.maxAlongside(core, data, mapOf(a to 2), c, usable)
+        validatePlace(core, around, usable, "alongside blocked")
+        check(around.layout != null && listOf(44, 45, 54, 55).all { around.layout!!.cells[it / 10][it % 10] == null }) { "a blocked square must stay empty" }
+        val all36 = GhMax.solve(core, data, all, usable, emptySet(), 150)
+        validate(core, all36, usable, all, "blocked centre")
     }
 
     private fun validatePlace(core: PlannerCore, res: GhPlaceResult, mask: BooleanArray?, what: String) {

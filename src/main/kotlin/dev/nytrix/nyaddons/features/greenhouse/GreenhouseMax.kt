@@ -19,6 +19,7 @@ class GhMaxResult(
 /**
  * What [GhMax.place] did with the asked amounts. [placed] is how many of each requested id the shared [layout] grows (ids with at
  * least 1), [unplaced] maps every requested id that did not fully fit to a short reason, [requested] is what was asked.
+ * [note] is an extra sentence for the player (set by [GhMax.maxAlongside]), empty otherwise.
  */
 class GhPlaceResult(
     val placed: Map<String, Int>,
@@ -27,6 +28,7 @@ class GhPlaceResult(
     val requested: Map<String, Int>,
     val stocked: List<String> = emptyList(),
     val totalCells: Int = 0,
+    val note: String = "",
 ) {
     val placedTotal get() = placed.values.sum()
     val requestedTotal get() = requested.values.sum()
@@ -55,6 +57,7 @@ class GhPlaceResult(
 object GhMax {
     const val DEFAULT_BUDGET_MILLIS = 400L
     const val PLACE_BUDGET_MILLIS = 700L
+    const val ALONGSIDE_BUDGET_MILLIS = 400L
     private const val MAX_PASSES = 40
     private const val ATTEMPTS = 6
 
@@ -181,28 +184,11 @@ object GhMax {
                 .thenByDescending { m -> m.requirements.sumOf { it.count } }
                 .thenBy { it.id },
         )
-        var layout: GhLayout? = null
-        var now: Map<String, Int> = emptyMap()
+        val state = Grown(null, emptyMap())
         var attempt = 0
-        for (m in order) {
-            val want = requested.getValue(m.id)
-            while ((now[m.id] ?: 0) < want && System.nanoTime() < deadline) {
-                var best: GhLayout? = null
-                var bestMap: Map<String, Int> = now
-                var bestCells = Int.MAX_VALUE
-                for (a in 0 until ATTEMPTS) {
-                    val next = core.extend(layout, m, mask, attempt + a) ?: continue
-                    val census = core.census(next)?.satisfied ?: continue
-                    if ((census[m.id] ?: 0) <= (now[m.id] ?: 0) || now.any { (id, n) -> (census[id] ?: 0) < n }) continue
-                    val used = countCells(next)
-                    if (used < bestCells) { best = next; bestMap = census; bestCells = used }
-                }
-                attempt += ATTEMPTS
-                if (best == null) break
-                layout = best
-                now = bestMap
-            }
-        }
+        for (m in order) attempt = grow(core, m, requested.getValue(m.id), state, mask, deadline, attempt)
+        val layout = state.layout
+        val now = state.now
         val placed = LinkedHashMap<String, Int>()
         for ((id, want) in requested) {
             val got = minOf(now[id] ?: 0, want)
@@ -214,6 +200,101 @@ object GhMax {
         val head = placed.keys.firstOrNull()
         val shown = layout?.let { l -> if (head == null) null else GhLayout(l.size, l.cells, head) }
         return GhPlaceResult(placed, shown, unplaced, requested, layout?.let { core.census(it)?.stocked } ?: emptyList(), shown?.let(::countCells) ?: 0)
+    }
+
+    /** A shared layout and, for each mutation id, how many blocks of it spawn there. */
+    private class Grown(var layout: GhLayout?, var now: Map<String, Int>)
+
+    /**
+     * Adds blocks of [m] on top of [state] until it has [want] (counted in the picture, other mutations' blocks included) or none
+     * fits any more, keeping the extension with the fewest squares and never breaking a block already there. Returns the next free
+     * attempt number, so the caller can keep the randomised placements apart.
+     */
+    private fun grow(core: PlannerCore, m: GhMutation, want: Int, state: Grown, mask: BooleanArray?, deadline: Long, attemptStart: Int): Int {
+        var attempt = attemptStart
+        while ((state.now[m.id] ?: 0) < want && System.nanoTime() < deadline) {
+            var best: GhLayout? = null
+            var bestMap: Map<String, Int> = state.now
+            var bestCells = Int.MAX_VALUE
+            for (a in 0 until ATTEMPTS) {
+                val next = core.extend(state.layout, m, mask, attempt + a) ?: continue
+                val census = core.census(next)?.satisfied ?: continue
+                if ((census[m.id] ?: 0) <= (state.now[m.id] ?: 0) || state.now.any { (id, n) -> (census[id] ?: 0) < n }) continue
+                val used = countCells(next)
+                if (used < bestCells) { best = next; bestMap = census; bestCells = used }
+            }
+            attempt += ATTEMPTS
+            if (best == null) break
+            state.layout = best
+            state.now = bestMap
+        }
+        return attempt
+    }
+
+    /** As [maxAlongside] on the planner's own core; nothing is placed when [planner] is null or the data is not loaded. */
+    fun maxAlongside(planner: GhPlanner?, data: GhData, amounts: Map<String, Int>, id: String, unlocked: BooleanArray?, budgetMillis: Long = ALONGSIDE_BUDGET_MILLIS): GhPlaceResult {
+        if (planner == null || !data.ready) return GhPlaceResult(emptyMap(), null, mapOf(id to "planner not ready"), emptyMap())
+        return maxAlongside(coreOf(planner, data), data, amounts, id, unlocked, budgetMillis)
+    }
+
+    /**
+     * The most blocks of [id] that fit in one shared layout together with everything typed in the OTHER rows of [amounts] (the
+     * amount of [id] itself is ignored). The others are placed first exactly as [place] does, then blocks of [id] are added on top
+     * ([PlannerCore.extend], several randomised passes while the budget lasts, the pass with most blocks wins). The result is the
+     * combined plan: [GhPlaceResult.placed] has the others and [id] with its count (when above 0), [GhPlaceResult.requested] the
+     * others plus that count. When the others do not all fit on their own, [id] gets 0 and the result is the plan of the others
+     * with a [GhPlaceResult.note] saying so; when nothing else is typed this is the same as [solve] for [id] alone.
+     */
+    fun maxAlongside(core: PlannerCore, data: GhData, amounts: Map<String, Int>, id: String, unlocked: BooleanArray?, budgetMillis: Long = ALONGSIDE_BUDGET_MILLIS): GhPlaceResult {
+        val mask = unlocked?.takeIf { it.size == 100 }
+        val unlockedCells = mask?.count { it } ?: 100
+        val name = data.mutation(id)?.name ?: id
+        val others = LinkedHashMap<String, Int>()
+        for ((k, n) in amounts) if (k != id && n > 0) others[k] = n
+        val m = data.mutation(id)
+        if (m == null || id in GreenhouseGoals.skippedMutations || !core.targetable(id)) {
+            val why = if (m == null) "unknown mutation" else if (id in GreenhouseGoals.skippedMutations) "not part of the plan (needs an event or quest items)" else "cannot share a layout"
+            return place(core, data, others, mask, budgetMillis).let { GhPlaceResult(it.placed, it.layout, it.unplaced + (id to why), it.requested, it.stocked, it.totalCells, "$name: $why.") }
+        }
+        if (others.isEmpty()) {
+            val r = solve(core, data, listOf(id), mask, emptySet(), budgetMillis)
+            val n = r.counts[id] ?: 0
+            if (n <= 0) return GhPlaceResult(emptyMap(), null, mapOf(id to (r.unplaced[id] ?: "no layout found")), emptyMap(), note = "$name: ${r.unplaced[id] ?: "does not fit"}.")
+            return GhPlaceResult(mapOf(id to n), r.layout, emptyMap(), mapOf(id to n), r.stocked, r.totalCells)
+        }
+        val deadline = System.nanoTime() + budgetMillis * 1_000_000L
+        val base = place(core, data, others, mask, budgetMillis / 2)
+        if (base.unplaced.isNotEmpty()) {
+            return GhPlaceResult(base.placed, base.layout, base.unplaced, base.requested, base.stocked, base.totalCells, "The other rows already do not fit, so $name gets 0.")
+        }
+        val baseCensus = base.layout?.let { core.census(it)?.satisfied } ?: emptyMap()
+        var bestLayout: GhLayout? = null
+        var bestNow: Map<String, Int> = baseCensus
+        var bestCount = 0
+        var bestCells = Int.MAX_VALUE
+        var pass = 0
+        while (pass < MAX_PASSES && (pass == 0 || System.nanoTime() < deadline)) {
+            val state = Grown(base.layout, baseCensus)
+            grow(core, m, Int.MAX_VALUE, state, mask, if (pass == 0) Long.MAX_VALUE else deadline, 1000 + pass * 97)
+            val n = state.now[id] ?: 0
+            val cells = state.layout?.let(::countCells) ?: Int.MAX_VALUE
+            if (n > bestCount || (n == bestCount && n > 0 && cells < bestCells)) {
+                bestCount = n
+                bestLayout = state.layout
+                bestNow = state.now
+                bestCells = cells
+            }
+            pass++
+        }
+        if (bestCount <= 0 || bestLayout == null) {
+            return GhPlaceResult(base.placed, base.layout, emptyMap(), base.requested, base.stocked, base.totalCells, whyNot(core, m, mask, unlockedCells).let { if (it.startsWith("no room left")) "No room left for $name alongside the other rows." else "$name does not fit: $it." })
+        }
+        val placed = LinkedHashMap(base.placed)
+        placed[id] = bestCount
+        val requested = LinkedHashMap(base.requested)
+        requested[id] = bestCount
+        val shown = GhLayout(bestLayout.size, bestLayout.cells, id)
+        return GhPlaceResult(placed, shown, emptyMap(), requested, core.census(shown)?.stocked ?: emptyList(), countCells(shown))
     }
 
     private class Score(val total: Int, val fresh: Int)

@@ -2,6 +2,7 @@ package dev.nytrix.nyaddons.features.greenhouse
 
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.config.GreenhouseView
+import dev.nytrix.nyaddons.core.PinnedPlot
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.core.TimeUtils
 import dev.nytrix.nyaddons.gui.ConfigTheme
@@ -54,6 +55,7 @@ private class Picture(
 private class Side {
     var title = ""
     var icon: String? = null
+    var summary = ""
     var busy = false
     var busyText = "Working..."
     var picture: Picture? = null
@@ -64,6 +66,7 @@ private class Side {
     fun clear() {
         title = ""
         icon = null
+        summary = ""
         busy = false
         picture = null
         lines = emptyList()
@@ -72,7 +75,14 @@ private class Side {
     }
 }
 
-private class Rect(val x: Int, val y: Int, val w: Int, val h: Int) {
+private class Rect(var x: Int, var y: Int, var w: Int, var h: Int) {
+    fun set(nx: Int, ny: Int, nw: Int, nh: Int) {
+        x = nx
+        y = ny
+        w = nw
+        h = nh
+    }
+
     fun contains(mx: Int, my: Int) = mx >= x && mx < x + w && my >= y && my < y + h
 }
 
@@ -95,7 +105,11 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
     // Unlocked squares and how mutations fit on them.
     private var mask = GreenhousePlots.default()
+    private var blocked = BooleanArray(GreenhousePlots.CELLS)
+    private var usableMask = mask
     private var unlocked = 0
+    private var blockedCount = 0
+    private var blockMode = false
     private val fit = GreenhouseFit()
     private var fitSeen = -1
     private var stockSeen = -1L
@@ -115,6 +129,13 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private var allButton = Rect(0, 0, 0, 0)
     private var defaultButton = Rect(0, 0, 0, 0)
     private var doneButton = Rect(0, 0, 0, 0)
+    private var blockButton = Rect(0, 0, 0, 0)
+    private var unblockButton = Rect(0, 0, 0, 0)
+    private var pinPlanner = Rect(0, 0, 0, 0)
+    private val pinRose = Rect(0, 0, 0, 0)
+    private var pinLabel = "Pin to screen"
+    private var plannerPinned = false
+    private var rosePinned = false
     private var plotsHint = emptyList<String>()
     private var plotsControlsX = 0
 
@@ -129,6 +150,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private var plannerRows = emptyList<PlannerRow>()
     private var plannerBoxX = 0
     private var plannerMaxX = 0
+    private var plannerMinusX = 0
+    private var plannerPlusX = 0
     private var plannerMaxW = 0
     private var headerA = ""
     private var headerSummary = ""
@@ -161,6 +184,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     // The Max solver of the Planner view (the main button or one row's "max"): one run at a time, answered on a background thread.
     @Volatile private var maxRunning = false
     @Volatile private var maxAnswer: GhMaxResult? = null
+    @Volatile private var alongAnswer: GhPlaceResult? = null
     @Volatile private var maxDone = false
     private var maxGeneration = 0
     private var maxRow: String? = null
@@ -235,13 +259,22 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         top = (height - panelHeight) / 2
         disclaimer = wrap("§7Shellfruit and Jerryflower are not included yet: the mod is being updated for them.", panelWidth - 16)
         mask = GreenhousePlots.current()
-        unlocked = GreenhousePlots.count(mask)
+        blocked = GreenhousePlots.currentBlocked()
+        updateCounts()
         if (fillValue == 0) fillValue = unlocked
         GhIcons.request()
         placeButtons()
         Greenhouse.data.request()
         rebuild()
-        fit.request(Greenhouse.data, mask)
+        fit.request(Greenhouse.data, usableMask)
+    }
+
+    /** The unlocked and blocked counts and the squares plans may use, after either set changed. */
+    private fun updateCounts() {
+        for (i in blocked.indices) if (blocked[i] && !mask[i]) blocked[i] = false
+        unlocked = GreenhousePlots.count(mask)
+        blockedCount = GreenhousePlots.count(blocked)
+        usableMask = GreenhousePlots.usable(mask, blocked)
     }
 
     private fun placeButtons() {
@@ -268,8 +301,14 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         fillButton = Rect(fillPlus.x + 18, y0, font.width("Fill") + 14, BUTTON_H)
         allButton = Rect(cx, y0 + 22, font.width("All") + 14, BUTTON_H)
         defaultButton = Rect(allButton.x + allButton.w + 4, y0 + 22, font.width("Default") + 14, BUTTON_H)
-        doneButton = Rect(cx, y0 + 44, font.width("Done") + 14, BUTTON_H)
-        plotsHint = wrap("§7Fill unlocks the squares nearest the middle first. Default is the 12 middle squares.", left + panelWidth - 8 - cx)
+        unblockButton = Rect(defaultButton.x + defaultButton.w + 4, y0 + 22, font.width("Unblock all") + 14, BUTTON_H)
+        blockButton = Rect(cx, y0 + 44, font.width("Block mode") + 14, BUTTON_H)
+        doneButton = Rect(blockButton.x + blockButton.w + 4, y0 + 44, font.width("Done") + 14, BUTTON_H)
+        plotsHint = wrap("§7Fill unlocks the squares nearest the middle first. Block mode: click an unlocked square to keep it empty.", left + panelWidth - 8 - cx)
+        // Planner: the pin button sits at the right end of the side panel's title row.
+        pinLabel = if (font.width("Planned layout") + 8 + font.width("Pin to screen") + 10 <= sideWidth) "Pin to screen" else "Pin"
+        val pinW = font.width(pinLabel) + 10
+        pinPlanner = Rect(sideLeft + sideWidth - pinW, linesY + 17, pinW, BUTTON_H - 2)
     }
 
     override fun tick() {
@@ -279,7 +318,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         if (ticks % 20 == 0) {
             GhIcons.request()
             Greenhouse.data.request()
-            fit.request(Greenhouse.data, mask)
+            fit.request(Greenhouse.data, usableMask)
             rebuild()
         } else if (stamp != stockSeen || fit.version != fitSeen) {
             rebuild()
@@ -293,8 +332,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         if (maxDone) {
             maxDone = false
             maxRunning = false
-            finishMax(maxAnswer, maxRow)
+            finishMax(maxAnswer, alongAnswer, maxRow)
             maxAnswer = null
+            alongAnswer = null
         }
         if (mixDone) {
             mixDone = false
@@ -401,10 +441,12 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
 
         // Planner list: every plannable mutation by name, with the amount typed for it.
-        val boxX = right - 4 - BOX_W
+        plannerPlusX = right - 4 - STEP_W
+        val boxX = plannerPlusX - 1 - BOX_W
         plannerBoxX = boxX
+        plannerMinusX = boxX - 1 - STEP_W
         plannerMaxW = font.width("max") + 6
-        plannerMaxX = boxX - 3 - plannerMaxW
+        plannerMaxX = plannerMinusX - 3 - plannerMaxW
         val plan = profile.planAmounts
         val unplaced = mixShown?.unplaced
         plannerRows = data.mutations.filter { it.id !in GreenhouseGoals.skippedMutations }.sortedBy { it.name }.map { m ->
@@ -413,6 +455,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             PlannerRow(m.id, label, font.width(label), m.id in profile.analysed, amount, amount.toString(), amount > 0 && unplaced != null && m.id in unplaced)
         }
         buildPlannerSide()
+        refreshPinFlags()
 
         all = data.mutations.sortedBy { it.name }
         allLabels = Array(all.size) { "${rarityCode(all[it].rarity)}${all[it].name}" }
@@ -591,6 +634,14 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         graphics.text(font, shown, x + BOX_W - 3 - font.width(shown), y + (BOX_H - 8) / 2 + 1, if (dim) DIMMED_TEXT else WHITE, false)
     }
 
+    /** A small square - or + button next to an amount box. */
+    private fun drawStepper(graphics: GuiGraphicsExtractor, x: Int, y: Int, label: String, mouseX: Int, mouseY: Int) {
+        val over = mouseX in x until x + STEP_W && mouseY in y until y + BOX_H
+        graphics.fill(x, y, x + STEP_W, y + BOX_H, SLOT_BORDER)
+        graphics.fill(x + 1, y + 1, x + STEP_W - 1, y + BOX_H - 1, if (over) PANEL_LIGHT else SLOT_BACKGROUND)
+        graphics.text(font, label, x + (STEP_W - font.width(label)) / 2, y + (BOX_H - 8) / 2 + 1, WHITE, false)
+    }
+
     private fun drawDropdown(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {
         val x = dropdownX
         val y = top + 5
@@ -688,21 +739,24 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             graphics.fill(plannerMaxX + 1, by + 1, plannerMaxX + plannerMaxW - 1, by + BOX_H - 1, if (over) PANEL_LIGHT else SLOT_BACKGROUND)
             graphics.text(font, "max", plannerMaxX + 3, by + (BOX_H - 8) / 2 + 1, if (busy) DIMMED_TEXT else WHITE, false)
             val focused = focus == FOCUS_ROW && focusId == row.id
+            drawStepper(graphics, plannerMinusX, by, "-", mouseX, mouseY)
             drawNumberBox(graphics, plannerBoxX, by, if (focused) focusText else row.amountText, focused, row.amount == 0, row.problem)
+            drawStepper(graphics, plannerPlusX, by, "+", mouseX, mouseY)
         }
         drawScrollbar(graphics, GreenhouseView.PLANNER.ordinal, listRight - 4)
         if (!loading && plannerRows.isEmpty()) graphics.text(font, "§7No mutation data.", listLeft, listTop + 2, WHITE, false)
-        drawPlannerSide(graphics)
+        drawPlannerSide(graphics, mouseX, mouseY)
     }
 
     /** The Planner's side panel: summary, the shared layout, what did not fit and the crops needed. Scrolls with the wheel when it is taller than the window. */
-    private fun drawPlannerSide(graphics: GuiGraphicsExtractor) {
+    private fun drawPlannerSide(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {
         val s = plannerSide
         val x = sideLeft
         val w = sideWidth
         graphics.fill(x - 4, listTop - 2, x - 3, listBottom, SLOT_BORDER)
         graphics.text(font, s.title, x, listTop + 3, WHITE, false)
         val top = listTop + 16
+        if (s.picture != null && !s.busy) drawPinButton(graphics, pinPlanner, plannerPinned, mouseX, mouseY)
         if (s.busy) {
             graphics.text(font, "§7${s.busyText}", x, top, WHITE, false)
             return
@@ -737,6 +791,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
     }
 
+    private fun drawPinButton(graphics: GuiGraphicsExtractor, r: Rect, pinned: Boolean, mouseX: Int, mouseY: Int) {
+        drawButton(graphics, r, if (pinned) "Unpin" else pinLabel, mouseX, mouseY, pinned)
+    }
+
     private fun drawCheckbox(graphics: GuiGraphicsExtractor, x: Int, y: Int, checked: Boolean) {
         graphics.fill(x, y, x + 9, y + 9, SLOT_BORDER)
         graphics.fill(x + 1, y + 1, x + 8, y + 8, SLOT_BACKGROUND)
@@ -764,11 +822,11 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
         drawScrollbar(graphics, GreenhouseView.ROSE_DRAGON.ordinal, listRight - 4)
         if (loading) graphics.text(font, "§7Mutation requirements appear once the data loads.", listLeft, listBottom - 10, WHITE, false)
-        if (sideOpen) drawSide(graphics, rose)
+        if (sideOpen) drawSide(graphics, rose, mouseX, mouseY)
     }
 
     /** The side panel: a title with its icon, then the layout (or a note), the legend and small extra lines. */
-    private fun drawSide(graphics: GuiGraphicsExtractor, s: Side) {
+    private fun drawSide(graphics: GuiGraphicsExtractor, s: Side, mouseX: Int, mouseY: Int) {
         val x = sideLeft
         val w = sideWidth
         graphics.fill(x - 4, listTop - 2, x - 3, listBottom, SLOT_BORDER)
@@ -791,6 +849,11 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             y += 9
         }
         val shown = s.picture ?: return
+        // The pin button sits between the round lines and the grid.
+        val label = if (rosePinned) "Unpin" else pinLabel
+        pinRose.set(x, y + 1, font.width(label) + 10, BUTTON_H - 2)
+        drawPinButton(graphics, pinRose, rosePinned, mouseX, mouseY)
+        y += BUTTON_H
         drawPicture(graphics, shown, x, y + 3, w, listBottom - y - 3, s.extra)
     }
 
@@ -927,7 +990,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         for (r in 0 until rows) for (c in 0 until cols) {
             val cx = x + c * cell
             val cy = y + r * cell
-            graphics.fill(cx + 1, cy + 1, cx + cell, cy + cell, if (mask[(r0 + r) * GreenhousePlots.GRID + c0 + c]) EMPTY_CELL else LOCKED)
+            val i = (r0 + r) * GreenhousePlots.GRID + c0 + c
+            graphics.fill(cx + 1, cy + 1, cx + cell, cy + cell, if (blocked[i]) BLOCKED_CELL else if (mask[i]) EMPTY_CELL else LOCKED)
         }
         val data = Greenhouse.data
         for (b in shown.blockId.indices) {
@@ -967,7 +1031,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     }
 
     private fun drawPlots(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {
-        graphics.text(font, "§fPlots: click a square to unlock or lock it", left + 8, linesY + 1, WHITE, false)
+        graphics.text(font, if (blockMode) "§cBlock mode: §fclick an unlocked square to block or unblock it" else "§fPlots: click a square to unlock or lock it", left + 8, linesY + 1, WHITE, false)
         val g = plotsGrid
         val cell = plotsCell
         val n = GreenhousePlots.GRID
@@ -977,10 +1041,24 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             val cy = g.y + r * cell
             val on = mask[r * n + c]
             val hover = mouseX in cx until cx + cell && mouseY in cy until cy + cell
-            graphics.fill(cx + 1, cy + 1, cx + cell, cy + cell, if (on) (if (hover) GOOD else CROP_FILL) else if (hover) PANEL_LIGHT else LOCKED)
+            val block = blocked[r * n + c]
+            graphics.fill(cx + 1, cy + 1, cx + cell, cy + cell, when {
+                block -> if (hover) BAD else BLOCKED_CELL
+                on -> if (hover) (if (blockMode) BAD else GOOD) else CROP_FILL
+                hover -> PANEL_LIGHT
+                else -> LOCKED
+            })
+            if (block) {
+                // A cross over the blocked square.
+                val inner = cell - 5
+                for (k in 0 until inner) {
+                    graphics.fill(cx + 3 + k, cy + 3 + k, cx + 4 + k, cy + 4 + k, BLOCKED_CROSS)
+                    graphics.fill(cx + 3 + inner - 1 - k, cy + 3 + k, cx + 4 + inner - k, cy + 4 + k, BLOCKED_CROSS)
+                }
+            }
         }
         val cx = plotsControlsX
-        graphics.text(font, "§fUnlocked §b$unlocked§f/${GreenhousePlots.CELLS}", cx, g.y + 1, WHITE, false)
+        graphics.text(font, "§fUnlocked §b$unlocked§f/${GreenhousePlots.CELLS}§f, blocked ${if (blockedCount > 0) "§c" else "§7"}$blockedCount", cx, g.y + 1, WHITE, false)
         graphics.text(font, "Fill to", cx, fillBox.y + 4, TITLE_COLOR, false)
         drawNumberBox(graphics, fillBox.x, fillBox.y + 1, if (focus == FOCUS_FILL) focusText else fillValue.toString(), focus == FOCUS_FILL, false)
         drawButton(graphics, fillMinus, "-", mouseX, mouseY)
@@ -988,6 +1066,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         drawButton(graphics, fillButton, "Fill", mouseX, mouseY)
         drawButton(graphics, allButton, "All", mouseX, mouseY)
         drawButton(graphics, defaultButton, "Default", mouseX, mouseY)
+        drawButton(graphics, unblockButton, "Unblock all", mouseX, mouseY)
+        drawButton(graphics, blockButton, "Block mode", mouseX, mouseY, blockMode)
         drawButton(graphics, doneButton, "Done", mouseX, mouseY, true)
         var y = doneButton.y + BUTTON_H + 10
         for (line in plotsHint) {
@@ -1038,6 +1118,16 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             }
         }
         if (plotsOpen) return plotsClicked(mx, my)
+        if (view == GreenhouseView.PLANNER && plannerSide.picture != null && !plannerSide.busy && pinPlanner.contains(mx, my)) {
+            endFocus()
+            togglePin(plannerSide, plannerPinned)
+            return true
+        }
+        if (view == GreenhouseView.ROSE_DRAGON && sideOpen && rose.picture != null && !rose.busy && pinRose.contains(mx, my)) {
+            endFocus()
+            togglePin(rose, rosePinned)
+            return true
+        }
         if (view == GreenhouseView.ROSE_DRAGON && sideOpen && mx >= sideLeft + sideWidth - 12 && mx < sideLeft + sideWidth && my >= listTop && my < listTop + 14) {
             endFocus()
             closeSide()
@@ -1059,7 +1149,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
                     if (mx >= plannerBoxX && mx < plannerBoxX + BOX_W) {
                         beginFocus(FOCUS_ROW, row.id, row.amount.toString())
                         keepFocus = true
-                    } else if (mx >= plannerMaxX && mx < plannerMaxX + plannerMaxW) startMax(row.id)
+                    } else if (mx >= plannerMinusX && mx < plannerMinusX + STEP_W) step(row, -1)
+                    else if (mx >= plannerPlusX && mx < plannerPlusX + STEP_W) step(row, 1)
+                    else if (mx >= plannerMaxX && mx < plannerMaxX + plannerMaxW) startMax(row.id)
                     handled = true
                 }
             }
@@ -1096,6 +1188,15 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         if (g.contains(mx, my)) {
             endFocus()
             val i = (my - g.y) / plotsCell * GreenhousePlots.GRID + (mx - g.x) / plotsCell
+            if (blockMode) {
+                // Only unlocked squares can be blocked; a locked one is left alone.
+                if (mask[i]) {
+                    val next = blocked.copyOf()
+                    next[i] = !next[i]
+                    applyBlocked(next)
+                }
+                return true
+            }
             val next = mask.copyOf()
             next[i] = !next[i]
             applyMask(next)
@@ -1108,6 +1209,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             fillButton.contains(mx, my) -> { endFocus(); applyMask(GreenhousePlots.fill(fillValue)) }
             allButton.contains(mx, my) -> { endFocus(); fillValue = GreenhousePlots.CELLS; applyMask(GreenhousePlots.all()) }
             defaultButton.contains(mx, my) -> { endFocus(); applyMask(GreenhousePlots.default()); fillValue = unlocked }
+            unblockButton.contains(mx, my) -> { endFocus(); applyBlocked(BooleanArray(GreenhousePlots.CELLS)) }
+            blockButton.contains(mx, my) -> { endFocus(); blockMode = !blockMode }
             doneButton.contains(mx, my) -> { endFocus(); plotsOpen = false }
             else -> endFocus()
         }
@@ -1116,9 +1219,23 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
     private fun applyMask(next: BooleanArray) {
         mask = next
-        unlocked = GreenhousePlots.count(next)
+        val before = blockedCount
+        updateCounts()
         GreenhousePlots.save(next)
-        fit.request(Greenhouse.data, next)
+        if (blockedCount != before) GreenhousePlots.saveBlocked(blocked)
+        squaresChanged()
+    }
+
+    private fun applyBlocked(next: BooleanArray) {
+        blocked = next
+        updateCounts()
+        GreenhousePlots.saveBlocked(blocked)
+        squaresChanged()
+    }
+
+    /** The squares plans may use changed: plan everything again for them. */
+    private fun squaresChanged() {
+        fit.request(Greenhouse.data, usableMask)
         clearPlan()
         // A Max run was for the old squares: drop it (the amounts stay) and plan the amounts again.
         maxGeneration++
@@ -1188,6 +1305,13 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             }
             FOCUS_FILL -> fillValue = value.coerceAtMost(GreenhousePlots.CELLS)
         }
+        rebuild()
+    }
+
+    /** One press of a row's - or + button. */
+    private fun step(row: PlannerRow, delta: Int) {
+        putAmount(row.id, (row.amount + delta).coerceIn(0, MAX_AMOUNT))
+        markMixStale(false)
         rebuild()
     }
 
@@ -1262,7 +1386,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     /**
      * Works out, off the render thread, the most mutations one layout can grow, then fills the amounts in [finishMax].
      * [row] null is the main button: the best mix of the rows with an amount (all rows when none has), honouring "One of each".
-     * A row id asks for the most of that one mutation alone and only changes that row.
+     * A row id asks for the most of that one mutation that fits together with what is typed in the other rows ([GhMax.maxAlongside])
+     * and only changes that row.
      */
     private fun startMax(row: String?) {
         val data = Greenhouse.data
@@ -1270,15 +1395,17 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val analysed = saved.analysed.toSet()
         val every = uniqueOrder(data.mutations).map { it.id }
         val plan = saved.planAmounts
-        val candidates = if (row != null) listOf(row) else every.filter { (plan[it] ?: 0) > 0 }.ifEmpty { every }
-        val copy = mask.copyOf()
+        val candidates = every.filter { (plan[it] ?: 0) > 0 }.ifEmpty { every }
+        val typed = if (row != null) HashMap(plan) else null
+        val copy = usableMask.copyOf()
         val planner = Greenhouse.planner
         val oneOfEach = row == null && saved.planOneOfEach
-        val budget = if (row != null) ROW_MAX_BUDGET_MILLIS else GhMax.DEFAULT_BUDGET_MILLIS
+        val budget = if (row != null) GhMax.ALONGSIDE_BUDGET_MILLIS else GhMax.DEFAULT_BUDGET_MILLIS
         maxRunning = true
         maxRow = row
         maxDone = false
         maxAnswer = null
+        alongAnswer = null
         mixGeneration++
         mixStale = false
         mixWorking = false
@@ -1286,33 +1413,37 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         plannerSide.busyText = "Working..."
         val generation = ++maxGeneration
         Thread({
-            val result = try {
-                GhMax.solve(planner, data, candidates, copy, analysed, budget, oneOfEach)
+            var along: GhPlaceResult? = null
+            var result: GhMaxResult? = null
+            try {
+                if (row != null) along = GhMax.maxAlongside(planner, data, typed!!, row, copy, budget)
+                else result = GhMax.solve(planner, data, candidates, copy, analysed, budget, oneOfEach)
             } catch (_: Exception) {
-                null
             }
             if (generation == maxGeneration) {
                 maxAnswer = result
+                alongAnswer = along
                 maxDone = true
             }
         }, "NyAddOns greenhouse max").apply { isDaemon = true }.start()
     }
 
-    private fun finishMax(result: GhMaxResult?, row: String?) {
+    private fun finishMax(result: GhMaxResult?, along: GhPlaceResult?, row: String?) {
         plannerSide.busy = false
+        if (row != null && along != null) {
+            // One row: only its own box changes, and the combined plan it was found in is the layout shown.
+            putAmount(row, along.placed[row] ?: 0)
+            mixShown = along
+            mixStale = false
+            rebuild()
+            return
+        }
         if (result == null) {
             // No answer: keep the amounts and show the old plan again.
             mixShown = null
             plannerSide.lines = wrap("§cNo answer: the planner could not be run.", sideWidth)
             plannerSide.picture = null
             plannerSide.rows = emptyList()
-            return
-        }
-        if (row != null) {
-            // One row: only its own box changes, then the whole set is planned again.
-            putAmount(row, result.counts[row] ?: 0)
-            markMixStale(true)
-            rebuild()
             return
         }
         // Overwrite the amount boxes: the counts for the placed mutations, zero for the rest. The Max layout is the plan.
@@ -1343,7 +1474,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             mixDirtyAt = ticks
             return
         }
-        val copy = mask.copyOf()
+        val copy = usableMask.copyOf()
         val planner = Greenhouse.planner
         val generation = mixGeneration
         mixWorking = true
@@ -1371,6 +1502,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         s.title = "Planned layout"
         s.icon = null
         s.extra = emptyList()
+        s.summary = ""
         if (result == null || result.requestedTotal <= 0 || !data.ready) {
             s.lines = wrap("§7Type an amount for a mutation, or press Max for the best mix. The layout, what does not fit and the crops needed show here.", w)
             s.picture = null
@@ -1380,8 +1512,13 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
         val kinds = result.placed.size
         val lines = ArrayList<String>(4)
-        if (result.placedTotal <= 0) lines += "§cPlanned: nothing fits on $unlocked squares"
-        else lines += wrap("§fPlanned: §e${result.placedTotal} §fmutations ($kinds ${if (kinds == 1) "kind" else "kinds"}) on $unlocked squares, ${result.totalCells} used", w)
+        val usable = unlocked - blockedCount
+        if (result.note.isNotEmpty()) lines += wrap("§c${result.note}", w)
+        if (result.placedTotal <= 0) lines += "§cPlanned: nothing fits on $usable squares"
+        else {
+            s.summary = "§fPlanned: §e${result.placedTotal} §fmutations ($kinds ${if (kinds == 1) "kind" else "kinds"}) on $usable squares, ${result.totalCells} used"
+            lines += wrap(s.summary, w)
+        }
         if (result.rounds > 0) lines += "§bx${result.rounds} rounds §7(${result.placedTotal} of ${result.requestedTotal} fit at once)"
         s.lines = lines
         if (mixPictureFor !== result) {
@@ -1424,6 +1561,27 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
     }
 
+    // Pin to screen
+
+    /** What [side] shows right now as a pin, or null when it has no layout. The title is the panel's own, without colour codes. */
+    private fun snapshot(side: Side): PinnedPlot? {
+        val shown = side.picture?.layout ?: return null
+        return PinnedPlot.of(shown.cells, strip(if (side === rose) rose.title else "Planned layout"), side.summary)
+    }
+
+    /** Pins what [side] shows, or removes the pin when [pinned] says this panel is the pinned one. */
+    private fun togglePin(side: Side, pinned: Boolean) {
+        if (pinned) GreenhousePin.unpin() else GreenhousePin.pin(snapshot(side) ?: return)
+        refreshPinFlags()
+    }
+
+    /** Whether the pin on the screen is the same as what each panel shows; recomputed when the panels or the pin change. */
+    private fun refreshPinFlags() {
+        val pin = GreenhousePin.current
+        plannerPinned = pin != null && snapshot(plannerSide)?.sameAs(pin) == true
+        rosePinned = pin != null && snapshot(rose)?.sameAs(pin) == true
+    }
+
     // Plot side panel
 
     private fun selectItem(row: TreeRow) {
@@ -1453,6 +1611,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         rose.picture = null
         rose.lines = emptyList()
         rose.extra = emptyList()
+        rose.summary = ""
         rose.busyText = "Planning..."
         panelRounds = 0
         val id = selId
@@ -1464,7 +1623,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
         rose.busy = true
         val generation = panelGeneration
-        val copy = mask.copyOf()
+        val copy = usableMask.copyOf()
         Thread({
             val result = try {
                 Greenhouse.planner.plan(target, copy)
@@ -1499,6 +1658,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val perRound = (made / (size * size)).coerceAtLeast(1)
         panelRounds = (selAmount + perRound - 1) / perRound
         rose.lines = if (panelRounds > 1) listOf("§bx$panelRounds rounds", "§7$perRound per round") else listOf("§aOne round")
+        rose.summary = if (panelRounds > 1) "§bx$panelRounds rounds§7, $perRound per round" else "§aOne round"
         rose.picture = makePicture(result, id)
     }
 
@@ -1518,7 +1678,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         clearPlan()
         planning = true
         val generation = planGeneration
-        val copy = mask.copyOf()
+        val copy = usableMask.copyOf()
         Thread({
             val result = try {
                 Greenhouse.planner.plan(target, copy)
@@ -1562,6 +1722,12 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     fun treeTextCenter(visibleIndex: Int) = intArrayOf(listLeft + 4 + (tree.getOrNull(scroll[view.ordinal] + visibleIndex)?.row?.depth ?: 0) * 10 + 14 + iconSize + 12, listTop + visibleIndex * rowH + rowH / 2)
     fun plotsButtonCenter() = intArrayOf(plotsButton.x + plotsButton.w / 2, plotsButton.y + plotsButton.h / 2)
     fun maxButtonCenter() = intArrayOf(maxButton.x + maxButton.w / 2, maxButton.y + maxButton.h / 2)
+    fun plannerMinusCenter(visibleIndex: Int) = intArrayOf(plannerMinusX + STEP_W / 2, uniqueRowY(visibleIndex))
+    fun plannerPlusCenter(visibleIndex: Int) = intArrayOf(plannerPlusX + STEP_W / 2, uniqueRowY(visibleIndex))
+    fun pinPlannerCenter() = intArrayOf(pinPlanner.x + pinPlanner.w / 2, pinPlanner.y + pinPlanner.h / 2)
+    fun pinRoseCenter() = intArrayOf(pinRose.x + pinRose.w / 2, pinRose.y + pinRose.h / 2)
+    fun blockModeCenter() = intArrayOf(blockButton.x + blockButton.w / 2, blockButton.y + blockButton.h / 2)
+    fun unblockAllCenter() = intArrayOf(unblockButton.x + unblockButton.w / 2, unblockButton.y + unblockButton.h / 2)
     fun plotCellCenter(row: Int, col: Int) = intArrayOf(plotsGrid.x + col * plotsCell + plotsCell / 2, plotsGrid.y + row * plotsCell + plotsCell / 2)
     fun fillBoxCenter() = intArrayOf(fillBox.x + fillBox.w / 2, fillBox.y + fillBox.h / 2)
     fun fillPlusCenter() = intArrayOf(fillPlus.x + fillPlus.w / 2, fillPlus.y + fillPlus.h / 2)
@@ -1572,6 +1738,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     val hasLayout get() = layout != null
     val plotsShown get() = plotsOpen
     val unlockedSquares get() = unlocked
+    val blockedSquares get() = blockedCount
+    val blockModeOn get() = blockMode
+    val plannerIsPinned get() = plannerPinned
+    val roseIsPinned get() = rosePinned
 
     /** How many icons the last drawn frame contained (rows, grid blocks, legend). */
     val iconsDrawn get() = iconsLastFrame
@@ -1580,6 +1750,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     fun treeIcons(): List<String> = tree.map { it.row.icon }
 
     /** The ids of the blocks in the Planner's layout (empty when there is none). */
+    val plannerLayout get() = plannerSide.picture?.layout
     val plannerBlockIds get() = plannerSide.picture?.blockId?.toList() ?: emptyList()
     val maxBusy get() = maxRunning
 
@@ -1635,12 +1806,13 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         private const val BUTTON_H = 14
         private const val BOX_W = 30
         private const val BOX_H = 11
+        private const val STEP_W = 11
         private const val MAX_DIGITS = 4
+        private const val MAX_AMOUNT = 9999
         private const val LEGEND_ICON = 10
         private const val LEGEND_H = 12
         private const val FOUND_W = 28
         private const val MIX_DEBOUNCE_TICKS = 8
-        private const val ROW_MAX_BUDGET_MILLIS = 200L
 
         private const val FOCUS_NONE = 0
         private const val FOCUS_ROW = 1
@@ -1677,6 +1849,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         private const val TARGET_FILL = 0xFF6B5512.toInt()
         private const val MUTATION_FILL = 0xFF45305E.toInt()
         private const val CROP_FILL = 0xFF2A5A34.toInt()
+        private const val BLOCKED_CELL = 0xFF4A1818.toInt()
+        private const val BLOCKED_CROSS = 0xFFD04040.toInt()
 
         fun open() {
             NyAddOns.openScreen { GreenhouseScreen() }
