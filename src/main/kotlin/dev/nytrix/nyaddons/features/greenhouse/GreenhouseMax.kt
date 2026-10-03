@@ -58,6 +58,8 @@ object GhMax {
     const val DEFAULT_BUDGET_MILLIS = 400L
     const val PLACE_BUDGET_MILLIS = 700L
     const val ALONGSIDE_BUDGET_MILLIS = 400L
+    const val REPLAN_BUDGET_MILLIS = 400L
+    private const val REPLAN_PASSES = 30
     private const val MAX_PASSES = 40
     private const val ATTEMPTS = 6
 
@@ -163,7 +165,79 @@ object GhMax {
     fun place(core: PlannerCore, data: GhData, amounts: Map<String, Int>, unlocked: BooleanArray?, budgetMillis: Long = PLACE_BUDGET_MILLIS): GhPlaceResult {
         val deadline = System.nanoTime() + budgetMillis * 1_000_000L
         val mask = unlocked?.takeIf { it.size == 100 }
-        val unlockedCells = mask?.count { it } ?: 100
+        val req = prepare(core, data, amounts)
+        return runOrder(core, data, req, req.order, mask, deadline, 0) { false }
+    }
+
+    /** As [replan] on the planner's own core; nothing is placed when [planner] is null or the data is not loaded. */
+    fun replan(planner: GhPlanner?, data: GhData, amounts: Map<String, Int>, unlocked: BooleanArray?, budgetMillis: Long = REPLAN_BUDGET_MILLIS, abort: () -> Boolean = { false }): GhPlaceResult {
+        val asked = amounts.filterValues { it > 0 }
+        if (planner == null || !data.ready) return GhPlaceResult(emptyMap(), null, asked.mapValues { "planner not ready" }, asked)
+        return replan(coreOf(planner, data), data, amounts, unlocked, budgetMillis, abort)
+    }
+
+    /**
+     * A FRESH plan of the whole set [amounts] (never an extension of an earlier layout): pass 0 is [place]'s deterministic
+     * hardest-first order, later passes try seeded random re-orderings (and different random placements) while the budget lasts,
+     * so one more block never fails to fit when another arrangement of the same set would work. The pass placing the MOST blocks
+     * wins, ties go to fewer squares used. Stops at once when a pass places everything asked, or when [abort] says the answer is
+     * no longer wanted (a newer change superseded it). Still a greedy heuristic: "does not fit" means none of the tried orders fit.
+     */
+    fun replan(core: PlannerCore, data: GhData, amounts: Map<String, Int>, unlocked: BooleanArray?, budgetMillis: Long = REPLAN_BUDGET_MILLIS, abort: () -> Boolean = { false }): GhPlaceResult {
+        val deadline = System.nanoTime() + budgetMillis * 1_000_000L
+        val mask = unlocked?.takeIf { it.size == 100 }
+        val req = prepare(core, data, amounts)
+        var best = runOrder(core, data, req, req.order, mask, deadline, 0, abort)
+        val wanted = req.order.sumOf { req.requested.getValue(it.id) }
+        var pass = 1
+        while (best.placedTotal < wanted && pass <= REPLAN_PASSES && req.order.size + wanted > 1 && System.nanoTime() < deadline && !abort()) {
+            val rng = Rng(pass * 7919 + 17)
+            val order = ArrayList(req.order)
+            if (pass % 3 == 0) {
+                for (i in order.size - 1 downTo 1) { val j = rng.next(i + 1); val t = order[i]; order[i] = order[j]; order[j] = t }
+            } else {
+                val spread = 2 + pass / 2
+                val keys = order.indices.associateWith { it + rng.next(spread) }
+                val sorted = order.indices.sortedWith(compareBy({ keys.getValue(it) }, { it })).map { order[it] }
+                order.clear(); order.addAll(sorted)
+            }
+            val r = runOrder(core, data, req, order, mask, deadline, 2000 + pass * 113, abort)
+            if (r.placedTotal > best.placedTotal || (r.placedTotal == best.placedTotal && r.totalCells < best.totalCells)) best = r
+            pass++
+        }
+        return best
+    }
+
+    /**
+     * Keeps a claimed answer ([claimed]: what Max or a row's max found, with its own layout) consistent with a fresh plan: the
+     * whole claimed set is re-planned from scratch and that plan is returned when it places at least as many blocks, otherwise the
+     * claimed one stays. Either way the returned plan places [GhPlaceResult.placed] exactly as the boxes will say.
+     */
+    fun settle(core: PlannerCore, data: GhData, claimed: GhPlaceResult, unlocked: BooleanArray?, budgetMillis: Long = REPLAN_BUDGET_MILLIS, abort: () -> Boolean = { false }): GhPlaceResult {
+        if (claimed.placed.isEmpty() || claimed.unplaced.isNotEmpty()) return claimed
+        val fresh = replan(core, data, claimed.placed, unlocked, budgetMillis, abort)
+        return if (fresh.unplaced.isEmpty() && fresh.placedTotal >= claimed.placedTotal) GhPlaceResult(fresh.placed, fresh.layout, fresh.unplaced, fresh.requested, fresh.stocked, fresh.totalCells, claimed.note) else claimed
+    }
+
+    fun settle(planner: GhPlanner?, data: GhData, claimed: GhPlaceResult, unlocked: BooleanArray?, budgetMillis: Long = REPLAN_BUDGET_MILLIS, abort: () -> Boolean = { false }): GhPlaceResult =
+        if (planner == null || !data.ready) claimed else settle(coreOf(planner, data), data, claimed, unlocked, budgetMillis, abort)
+
+    /**
+     * How many blocks of [id] fit alongside the other rows of [amounts] (the same computation as the row's max), for the Planner's
+     * cap on that row. Null when the other rows do not fit on their own: then there is no cap to apply. Heuristic like everything
+     * here: it is the most our greedy search found, not a proof that one more cannot fit.
+     */
+    fun capAlongside(planner: GhPlanner?, data: GhData, amounts: Map<String, Int>, id: String, unlocked: BooleanArray?, budgetMillis: Long = ALONGSIDE_BUDGET_MILLIS, abort: () -> Boolean = { false }): Int? {
+        if (planner == null || !data.ready) return null
+        val r = maxAlongside(coreOf(planner, data), data, amounts, id, unlocked, budgetMillis, abort)
+        if (r.unplaced.keys.any { it != id }) return null
+        return r.placed[id] ?: 0
+    }
+
+    /** The asked amounts with the unplaceable ones already explained, and the placeable mutations hardest first. */
+    private class Request(val requested: Map<String, Int>, val unplaced: Map<String, String>, val order: List<GhMutation>)
+
+    private fun prepare(core: PlannerCore, data: GhData, amounts: Map<String, Int>): Request {
         val requested = LinkedHashMap<String, Int>()
         val unplaced = LinkedHashMap<String, String>()
         val order = ArrayList<GhMutation>()
@@ -184,13 +258,20 @@ object GhMax {
                 .thenByDescending { m -> m.requirements.sumOf { it.count } }
                 .thenBy { it.id },
         )
+        return Request(requested, unplaced, order)
+    }
+
+    /** One pass: grows each kind of [order] in turn on top of the picture so far. */
+    private fun runOrder(core: PlannerCore, data: GhData, req: Request, order: List<GhMutation>, mask: BooleanArray?, deadline: Long, attemptStart: Int, abort: () -> Boolean): GhPlaceResult {
+        val unlockedCells = mask?.count { it } ?: 100
+        val unplaced = LinkedHashMap(req.unplaced)
         val state = Grown(null, emptyMap())
-        var attempt = 0
-        for (m in order) attempt = grow(core, m, requested.getValue(m.id), state, mask, deadline, attempt)
+        var attempt = attemptStart
+        for (m in order) attempt = grow(core, m, req.requested.getValue(m.id), state, mask, deadline, attempt, abort)
         val layout = state.layout
         val now = state.now
         val placed = LinkedHashMap<String, Int>()
-        for ((id, want) in requested) {
+        for ((id, want) in req.requested) {
             val got = minOf(now[id] ?: 0, want)
             if (got > 0) placed[id] = got
             if (got >= want || id in unplaced) continue
@@ -199,7 +280,7 @@ object GhMax {
         }
         val head = placed.keys.firstOrNull()
         val shown = layout?.let { l -> if (head == null) null else GhLayout(l.size, l.cells, head) }
-        return GhPlaceResult(placed, shown, unplaced, requested, layout?.let { core.census(it)?.stocked } ?: emptyList(), shown?.let(::countCells) ?: 0)
+        return GhPlaceResult(placed, shown, unplaced, req.requested, layout?.let { core.census(it)?.stocked } ?: emptyList(), shown?.let(::countCells) ?: 0)
     }
 
     /** A shared layout and, for each mutation id, how many blocks of it spawn there. */
@@ -210,9 +291,9 @@ object GhMax {
      * fits any more, keeping the extension with the fewest squares and never breaking a block already there. Returns the next free
      * attempt number, so the caller can keep the randomised placements apart.
      */
-    private fun grow(core: PlannerCore, m: GhMutation, want: Int, state: Grown, mask: BooleanArray?, deadline: Long, attemptStart: Int): Int {
+    private fun grow(core: PlannerCore, m: GhMutation, want: Int, state: Grown, mask: BooleanArray?, deadline: Long, attemptStart: Int, abort: () -> Boolean = { false }): Int {
         var attempt = attemptStart
-        while ((state.now[m.id] ?: 0) < want && System.nanoTime() < deadline) {
+        while ((state.now[m.id] ?: 0) < want && System.nanoTime() < deadline && !abort()) {
             var best: GhLayout? = null
             var bestMap: Map<String, Int> = state.now
             var bestCells = Int.MAX_VALUE
@@ -232,9 +313,9 @@ object GhMax {
     }
 
     /** As [maxAlongside] on the planner's own core; nothing is placed when [planner] is null or the data is not loaded. */
-    fun maxAlongside(planner: GhPlanner?, data: GhData, amounts: Map<String, Int>, id: String, unlocked: BooleanArray?, budgetMillis: Long = ALONGSIDE_BUDGET_MILLIS): GhPlaceResult {
+    fun maxAlongside(planner: GhPlanner?, data: GhData, amounts: Map<String, Int>, id: String, unlocked: BooleanArray?, budgetMillis: Long = ALONGSIDE_BUDGET_MILLIS, abort: () -> Boolean = { false }): GhPlaceResult {
         if (planner == null || !data.ready) return GhPlaceResult(emptyMap(), null, mapOf(id to "planner not ready"), emptyMap())
-        return maxAlongside(coreOf(planner, data), data, amounts, id, unlocked, budgetMillis)
+        return maxAlongside(coreOf(planner, data), data, amounts, id, unlocked, budgetMillis, abort)
     }
 
     /**
@@ -245,7 +326,7 @@ object GhMax {
      * others plus that count. When the others do not all fit on their own, [id] gets 0 and the result is the plan of the others
      * with a [GhPlaceResult.note] saying so; when nothing else is typed this is the same as [solve] for [id] alone.
      */
-    fun maxAlongside(core: PlannerCore, data: GhData, amounts: Map<String, Int>, id: String, unlocked: BooleanArray?, budgetMillis: Long = ALONGSIDE_BUDGET_MILLIS): GhPlaceResult {
+    fun maxAlongside(core: PlannerCore, data: GhData, amounts: Map<String, Int>, id: String, unlocked: BooleanArray?, budgetMillis: Long = ALONGSIDE_BUDGET_MILLIS, abort: () -> Boolean = { false }): GhPlaceResult {
         val mask = unlocked?.takeIf { it.size == 100 }
         val unlockedCells = mask?.count { it } ?: 100
         val name = data.mutation(id)?.name ?: id
@@ -254,7 +335,7 @@ object GhMax {
         val m = data.mutation(id)
         if (m == null || id in GreenhouseGoals.skippedMutations || !core.targetable(id)) {
             val why = if (m == null) "unknown mutation" else if (id in GreenhouseGoals.skippedMutations) "not part of the plan (needs an event or quest items)" else "cannot share a layout"
-            return place(core, data, others, mask, budgetMillis).let { GhPlaceResult(it.placed, it.layout, it.unplaced + (id to why), it.requested, it.stocked, it.totalCells, "$name: $why.") }
+            return replan(core, data, others, mask, budgetMillis, abort).let { GhPlaceResult(it.placed, it.layout, it.unplaced + (id to why), it.requested, it.stocked, it.totalCells, "$name: $why.") }
         }
         if (others.isEmpty()) {
             val r = solve(core, data, listOf(id), mask, emptySet(), budgetMillis)
@@ -263,7 +344,7 @@ object GhMax {
             return GhPlaceResult(mapOf(id to n), r.layout, emptyMap(), mapOf(id to n), r.stocked, r.totalCells)
         }
         val deadline = System.nanoTime() + budgetMillis * 1_000_000L
-        val base = place(core, data, others, mask, budgetMillis / 2)
+        val base = replan(core, data, others, mask, budgetMillis / 2, abort)
         if (base.unplaced.isNotEmpty()) {
             return GhPlaceResult(base.placed, base.layout, base.unplaced, base.requested, base.stocked, base.totalCells, "The other rows already do not fit, so $name gets 0.")
         }
@@ -273,9 +354,9 @@ object GhMax {
         var bestCount = 0
         var bestCells = Int.MAX_VALUE
         var pass = 0
-        while (pass < MAX_PASSES && (pass == 0 || System.nanoTime() < deadline)) {
+        while (pass < MAX_PASSES && (pass == 0 || (System.nanoTime() < deadline && !abort()))) {
             val state = Grown(base.layout, baseCensus)
-            grow(core, m, Int.MAX_VALUE, state, mask, if (pass == 0) Long.MAX_VALUE else deadline, 1000 + pass * 97)
+            grow(core, m, Int.MAX_VALUE, state, mask, if (pass == 0) Long.MAX_VALUE else deadline, 1000 + pass * 97, if (pass == 0) { { false } } else abort)
             val n = state.now[id] ?: 0
             val cells = state.layout?.let(::countCells) ?: Int.MAX_VALUE
             if (n > bestCount || (n == bestCount && n > 0 && cells < bestCells)) {

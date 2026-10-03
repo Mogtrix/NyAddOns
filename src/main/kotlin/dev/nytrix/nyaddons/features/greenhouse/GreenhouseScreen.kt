@@ -26,7 +26,13 @@ private class UniqueRow(
 )
 
 /** One row of the Planner list: a mutation with its amount box. */
-private class PlannerRow(val id: String, val label: String, val labelWidth: Int, val analysed: Boolean, val amount: Int, val amountText: String, val problem: Boolean)
+private class PlannerRow(val id: String, val label: String, val labelWidth: Int, val analysed: Boolean, val amount: Int, val amountText: String, val problem: Boolean, val cap: Int = CAP_UNKNOWN) {
+    /** True when no more of this row fits alongside the other rows (as far as the cached search knows). */
+    val atCap get() = cap >= 0 && amount >= cap
+}
+
+/** [PlannerRow.cap] while the search for it has not answered. */
+private const val CAP_UNKNOWN = -2
 
 /** One line under the Planner layout: a heading or note ([heading], no icon column), else an icon, a text and optional counts at the right edge. */
 private class SideRow(val icon: String?, val text: String, val heading: Boolean = false, val counts: String = "", val countColor: Int = 0, val countWidth: Int = 0)
@@ -150,6 +156,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private var plannerRows = emptyList<PlannerRow>()
     private var plannerBoxX = 0
     private var plannerMaxX = 0
+    private var capMarkW = 0
     private var plannerMinusX = 0
     private var plannerPlusX = 0
     private var plannerMaxW = 0
@@ -186,6 +193,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     @Volatile private var maxAnswer: GhMaxResult? = null
     @Volatile private var alongAnswer: GhPlaceResult? = null
     @Volatile private var maxDone = false
+    @Volatile private var maxPlan: GhPlaceResult? = null
     private var maxGeneration = 0
     private var maxRow: String? = null
 
@@ -193,11 +201,26 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     @Volatile private var mixResult: GhPlaceResult? = null
     @Volatile private var mixDone = false
     @Volatile private var mixWorking = false
-    private var mixGeneration = 0
+    @Volatile private var mixGeneration = 0
     private var mixStale = true
     private var mixDirtyAt = 0
     private var mixShown: GhPlaceResult? = null
     private var mixPictureFor: GhPlaceResult? = null
+
+    // Row caps: the most a row can take alongside the OTHER rows' amounts (the row max computation), found in the background and
+    // cached per (other rows' amounts, squares, One of each). Only a heuristic: "no more fit" means our greedy search found none.
+    private class CapRequest(val key: Long, val id: String, val amounts: Map<String, Int>, val mask: BooleanArray)
+    private class CapAnswer(val key: Long, val id: String, val cap: Int)
+    private val capCache = object : LinkedHashMap<Long, Int>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Int>?) = size > CAP_CACHE_SIZE
+    }
+    private val capAnswers = java.util.concurrent.ConcurrentLinkedQueue<CapAnswer>()
+    private var capRunning = false
+    private var capPending: CapRequest? = null
+    private var capTouched: String? = null
+    private val capBase = HashMap<String, Int>() // amount before an increase that the cap has not checked yet
+    private var capNote = ""
+    private var maxKey = 0L
     private val plannerSide = Side()
     private var sideScroll = 0
     private var sideContentH = 0
@@ -306,6 +329,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         doneButton = Rect(blockButton.x + blockButton.w + 4, y0 + 44, font.width("Done") + 14, BUTTON_H)
         plotsHint = wrap("§7Fill unlocks the squares nearest the middle first. Block mode: click an unlocked square to keep it empty.", left + panelWidth - 8 - cx)
         // Planner: the pin button sits at the right end of the side panel's title row.
+        capMarkW = font.width("at max")
         pinLabel = if (font.width("Planned layout") + 8 + font.width("Pin to screen") + 10 <= sideWidth) "Pin to screen" else "Pin"
         val pinW = font.width(pinLabel) + 10
         pinPlanner = Rect(sideLeft + sideWidth - pinW, linesY + 17, pinW, BUTTON_H - 2)
@@ -335,7 +359,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             finishMax(maxAnswer, alongAnswer, maxRow)
             maxAnswer = null
             alongAnswer = null
+            maxPlan = null
         }
+        drainCaps()
         if (mixDone) {
             mixDone = false
             mixWorking = false
@@ -343,7 +369,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             mixResult = null
             buildPlannerSide()
         }
-        if (mixStale && view == GreenhouseView.PLANNER && !maxRunning && ticks - mixDirtyAt >= MIX_DEBOUNCE_TICKS) startMix()
+        if (mixStale && view == GreenhouseView.PLANNER && !maxRunning && ticks - mixDirtyAt >= MIX_DEBOUNCE_TICKS) {
+            checkCap()
+            startMix()
+        }
     }
 
     override fun removed() {
@@ -449,10 +478,11 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         plannerMaxX = plannerMinusX - 3 - plannerMaxW
         val plan = profile.planAmounts
         val unplaced = mixShown?.unplaced
+        val capSeed = capBaseHash()
         plannerRows = data.mutations.filter { it.id !in GreenhouseGoals.skippedMutations }.sortedBy { it.name }.map { m ->
             val label = "${rarityCode(m.rarity)}${m.name}"
             val amount = plan[m.id] ?: 0
-            PlannerRow(m.id, label, font.width(label), m.id in profile.analysed, amount, amount.toString(), amount > 0 && unplaced != null && m.id in unplaced)
+            PlannerRow(m.id, label, font.width(label), m.id in profile.analysed, amount, amount.toString(), amount > 0 && unplaced != null && m.id in unplaced, capCache[capKey(m.id, capSeed)] ?: CAP_UNKNOWN)
         }
         buildPlannerSide()
         refreshPinFlags()
@@ -635,11 +665,11 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     }
 
     /** A small square - or + button next to an amount box. */
-    private fun drawStepper(graphics: GuiGraphicsExtractor, x: Int, y: Int, label: String, mouseX: Int, mouseY: Int) {
-        val over = mouseX in x until x + STEP_W && mouseY in y until y + BOX_H
+    private fun drawStepper(graphics: GuiGraphicsExtractor, x: Int, y: Int, label: String, mouseX: Int, mouseY: Int, greyed: Boolean = false) {
+        val over = !greyed && mouseX in x until x + STEP_W && mouseY in y until y + BOX_H
         graphics.fill(x, y, x + STEP_W, y + BOX_H, SLOT_BORDER)
         graphics.fill(x + 1, y + 1, x + STEP_W - 1, y + BOX_H - 1, if (over) PANEL_LIGHT else SLOT_BACKGROUND)
-        graphics.text(font, label, x + (STEP_W - font.width(label)) / 2, y + (BOX_H - 8) / 2 + 1, WHITE, false)
+        graphics.text(font, label, x + (STEP_W - font.width(label)) / 2, y + (BOX_H - 8) / 2 + 1, if (greyed) DIMMED_TEXT else WHITE, false)
     }
 
     private fun drawDropdown(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {
@@ -726,10 +756,21 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             icon(graphics, row.id, listLeft + 4, y + (rowH - 1 - iconSize) / 2, iconSize)
             val ty = y + (rowH - 8) / 2
             graphics.text(font, row.label, labelX, ty, WHITE, false)
+            // "found" is worded out only when the row has room; a capped row shows it as a pip so the "at max" marker fits.
+            val capped = row.atCap && row.amount > 0
+            var nx = labelX + row.labelWidth + 6
             if (row.analysed) {
-                val fx = labelX + row.labelWidth + 6
-                if (fx + FOUND_W <= plannerMaxX - 4) graphics.text(font, "found", fx, ty, GOOD, false)
-                else if (fx + 5 <= plannerMaxX - 2) graphics.fill(fx, y + (rowH - 5) / 2, fx + 5, y + (rowH - 5) / 2 + 4, GOOD)
+                if (!capped && nx + FOUND_W <= plannerMaxX - 4) {
+                    graphics.text(font, "found", nx, ty, GOOD, false)
+                } else if (nx + 5 <= plannerMaxX - 2) {
+                    graphics.fill(nx, y + (rowH - 5) / 2, nx + 5, y + (rowH - 5) / 2 + 4, GOOD)
+                    nx += 9
+                }
+            }
+            // At the cap: no more fit alongside the other rows (a pip when there is no room for the words).
+            if (capped) {
+                if (nx + capMarkW <= plannerMaxX - 3) graphics.text(font, "at max", nx, ty, CAP_COLOR, false)
+                else if (nx + 5 <= plannerMaxX - 2) graphics.fill(nx, y + (rowH - 5) / 2, nx + 5, y + (rowH - 5) / 2 + 4, CAP_COLOR)
             }
             // The row's own max button, then its amount box (red edge when part of it did not fit).
             val by = y + (rowH - 1 - BOX_H) / 2
@@ -741,7 +782,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             val focused = focus == FOCUS_ROW && focusId == row.id
             drawStepper(graphics, plannerMinusX, by, "-", mouseX, mouseY)
             drawNumberBox(graphics, plannerBoxX, by, if (focused) focusText else row.amountText, focused, row.amount == 0, row.problem)
-            drawStepper(graphics, plannerPlusX, by, "+", mouseX, mouseY)
+            drawStepper(graphics, plannerPlusX, by, "+", mouseX, mouseY, row.atCap)
         }
         drawScrollbar(graphics, GreenhouseView.PLANNER.ordinal, listRight - 4)
         if (!loading && plannerRows.isEmpty()) graphics.text(font, "§7No mutation data.", listLeft, listTop + 2, WHITE, false)
@@ -1241,7 +1282,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         maxGeneration++
         maxRunning = false
         plannerSide.busy = false
-        markMixStale(false)
+        capNote = ""
+        markMixStale(true)
         if (selId != null) startPanelPlan()
         rebuild()
     }
@@ -1301,6 +1343,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         when (focus) {
             FOCUS_ROW -> {
                 putAmount(focusId, value)
+                capBase[focusId] = 0 // typed: a number over the cap snaps down to the cap itself
+                capTouched = focusId
+                capNote = ""
                 markMixStale(false)
             }
             FOCUS_FILL -> fillValue = value.coerceAtMost(GreenhousePlots.CELLS)
@@ -1310,9 +1355,103 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
     /** One press of a row's - or + button. */
     private fun step(row: PlannerRow, delta: Int) {
+        if (delta > 0 && row.atCap) return // nothing more fits alongside the other rows
         putAmount(row.id, (row.amount + delta).coerceIn(0, MAX_AMOUNT))
-        markMixStale(false)
+        if (delta > 0 && row.cap == CAP_UNKNOWN) capBase.putIfAbsent(row.id, row.amount) // checked when the cap arrives
+        capTouched = row.id
+        capNote = ""
+        markMixStale(true)
         rebuild()
+    }
+
+    // Row caps
+
+    private fun mixHash(x: Long): Long {
+        var z = x + -0x61c8864680b583ebL
+        z = (z xor (z ushr 30)) * -0x40a7b892e31b1a47L
+        z = (z xor (z ushr 27)) * -0x6b2fb644ecceee15L
+        return z xor (z ushr 31)
+    }
+
+    /** Hash of the squares plans may use and the One of each switch: the part of a cap's key that does not depend on the row. */
+    private fun capBaseHash(): Long = mixHash(usableMask.contentHashCode().toLong() * 2 + if (saved.planOneOfEach) 1 else 0)
+
+    /** The cap's cache key: the amounts typed in every row but [id], the squares and One of each. Order independent. */
+    private fun capKey(id: String, base: Long = capBaseHash()): Long {
+        var h = base
+        for ((k, n) in saved.planAmounts) if (k != id && n > 0) h += mixHash(k.hashCode().toLong() * 10007 + n)
+        return h
+    }
+
+    /** After the debounce: apply the cap of the row just changed when it is known, else look for it in the background. */
+    private fun checkCap() {
+        val id = capTouched ?: return
+        capTouched = null
+        val data = Greenhouse.data
+        if (!data.ready) return
+        val key = capKey(id)
+        val known = capCache[key]
+        if (known != null) {
+            applyCap(id, known)
+            return
+        }
+        val others = HashMap<String, Int>()
+        for ((k, n) in saved.planAmounts) if (k != id && n > 0) others[k] = n
+        val req = CapRequest(key, id, others, usableMask.copyOf())
+        if (capRunning) capPending = req else startCap(req)
+    }
+
+    private fun startCap(req: CapRequest) {
+        capRunning = true
+        val planner = Greenhouse.planner
+        val data = Greenhouse.data
+        Thread({
+            val cap = try {
+                GhMax.capAlongside(planner, data, req.amounts, req.id, req.mask) ?: NO_CAP
+            } catch (_: Exception) {
+                NO_CAP
+            }
+            capAnswers.add(CapAnswer(req.key, req.id, cap))
+        }, "NyAddOns greenhouse cap").apply { isDaemon = true }.start()
+    }
+
+    private fun drainCaps() {
+        var any = false
+        while (true) {
+            val a = capAnswers.poll() ?: break
+            any = true
+            capRunning = false
+            capCache[a.key] = a.cap
+            // Only a cap for what is typed now counts; a newer change has asked for its own.
+            if (capKey(a.id) == a.key) applyCap(a.id, a.cap)
+        }
+        if (any) {
+            val next = capPending
+            capPending = null
+            if (next != null) {
+                if (capCache[next.key] == null) startCap(next)
+                else if (capKey(next.id) == next.key) applyCap(next.id, capCache.getValue(next.key))
+            }
+            rebuild()
+        }
+    }
+
+    /**
+     * A row above its [cap] snaps down. A typed number goes to the cap; an increase that was not checked yet goes back to the cap or
+     * to what it was before, whichever is higher, so a row that ANOTHER row's increase pushed over its cap never changes by itself
+     * (that other row's increase is what gets capped). [NO_CAP]: the other rows do not fit on their own, so there is nothing to apply.
+     */
+    private fun applyCap(id: String, cap: Int) {
+        val base = capBase.remove(id) ?: 0
+        if (cap < 0) return
+        val now = saved.planAmounts[id] ?: 0
+        if (now <= cap) return
+        val snap = maxOf(cap, minOf(base, now))
+        if (snap >= now) return
+        putAmount(id, snap)
+        val name = Greenhouse.data.nameOf(id)
+        capNote = if (snap == cap) "$name capped at $cap: no more fit alongside the other rows." else "$name stays at $snap: no more fit alongside the other rows."
+        markMixStale(true)
     }
 
     /** Stores a Planner amount; 0 is the default and is not stored. */
@@ -1330,11 +1469,18 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private fun toggleOneOfEach() {
         saved.planOneOfEach = !saved.planOneOfEach
         Storage.markDirty()
+        capNote = ""
+        markMixStale(true)
+        rebuild()
     }
 
     private fun clearPlanner() {
         saved.planAmounts.clear()
         Storage.markDirty()
+        capBase.clear()
+        capTouched = null
+        capPending = null
+        capNote = ""
         maxGeneration++
         maxRunning = false
         mixGeneration++
@@ -1400,12 +1546,16 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val copy = usableMask.copyOf()
         val planner = Greenhouse.planner
         val oneOfEach = row == null && saved.planOneOfEach
+        maxKey = if (row != null) capKey(row) else 0L
+        capNote = ""
+        capTouched = null
         val budget = if (row != null) GhMax.ALONGSIDE_BUDGET_MILLIS else GhMax.DEFAULT_BUDGET_MILLIS
         maxRunning = true
         maxRow = row
         maxDone = false
         maxAnswer = null
         alongAnswer = null
+        maxPlan = null
         mixGeneration++
         mixStale = false
         mixWorking = false
@@ -1415,12 +1565,21 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         Thread({
             var along: GhPlaceResult? = null
             var result: GhMaxResult? = null
+            var plan: GhPlaceResult? = null
+            val stale = { generation != maxGeneration }
             try {
-                if (row != null) along = GhMax.maxAlongside(planner, data, typed!!, row, copy, budget)
-                else result = GhMax.solve(planner, data, candidates, copy, analysed, budget, oneOfEach)
+                // What max claims is then planned again from scratch; whichever places more (never fewer than claimed) is shown.
+                if (row != null) {
+                    along = GhMax.maxAlongside(planner, data, typed!!, row, copy, budget, stale)
+                    plan = GhMax.settle(planner, data, along, copy, GhMax.REPLAN_BUDGET_MILLIS, stale)
+                } else {
+                    result = GhMax.solve(planner, data, candidates, copy, analysed, budget, oneOfEach)
+                    plan = GhMax.settle(planner, data, GhPlaceResult(result.counts, result.layout, emptyMap(), result.counts, result.stocked, result.totalCells), copy, GhMax.REPLAN_BUDGET_MILLIS, stale)
+                }
             } catch (_: Exception) {
             }
             if (generation == maxGeneration) {
+                maxPlan = plan
                 maxAnswer = result
                 alongAnswer = along
                 maxDone = true
@@ -1433,7 +1592,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         if (row != null && along != null) {
             // One row: only its own box changes, and the combined plan it was found in is the layout shown.
             putAmount(row, along.placed[row] ?: 0)
-            mixShown = along
+            capBase.remove(row)
+            // The row's max is its cap for these other rows: remember it (-1 when the others do not fit on their own).
+            capCache[maxKey] = if (along.unplaced.keys.any { it != row }) NO_CAP else (along.placed[row] ?: 0)
+            mixShown = maxPlan ?: along
             mixStale = false
             rebuild()
             return
@@ -1448,7 +1610,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
         // Overwrite the amount boxes: the counts for the placed mutations, zero for the rest. The Max layout is the plan.
         for (m in Greenhouse.data.mutations) if (m.id !in GreenhouseGoals.skippedMutations) putAmount(m.id, result.counts[m.id] ?: 0)
-        mixShown = GhPlaceResult(result.counts, result.layout, emptyMap(), result.counts, result.stocked, result.totalCells)
+        capBase.clear()
+        mixShown = maxPlan ?: GhPlaceResult(result.counts, result.layout, emptyMap(), result.counts, result.stocked, result.totalCells)
         mixStale = false
         rebuild()
     }
@@ -1481,7 +1644,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         mixDone = false
         Thread({
             val result = try {
-                GhMax.place(planner, data, amounts, copy)
+                GhMax.replan(planner, data, amounts, copy, GhMax.REPLAN_BUDGET_MILLIS) { generation != mixGeneration }
             } catch (_: Exception) {
                 null
             }
@@ -1504,7 +1667,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         s.extra = emptyList()
         s.summary = ""
         if (result == null || result.requestedTotal <= 0 || !data.ready) {
-            s.lines = wrap("§7Type an amount for a mutation, or press Max for the best mix. The layout, what does not fit and the crops needed show here.", w)
+            s.lines = (if (capNote.isEmpty()) emptyList() else wrap("§e$capNote", w)) + wrap("§7Type an amount for a mutation, or press Max for the best mix. The layout, what does not fit and the crops needed show here.", w)
             s.picture = null
             s.rows = emptyList()
             mixPictureFor = null
@@ -1513,6 +1676,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val kinds = result.placed.size
         val lines = ArrayList<String>(4)
         val usable = unlocked - blockedCount
+        if (capNote.isNotEmpty()) lines += wrap("§e$capNote", w)
         if (result.note.isNotEmpty()) lines += wrap("§c${result.note}", w)
         if (result.placedTotal <= 0) lines += "§cPlanned: nothing fits on $usable squares"
         else {
@@ -1755,10 +1919,14 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     val maxBusy get() = maxRunning
 
     /** True while the Planner is working out a layout (Max or typed amounts). */
-    val plannerBusy get() = maxRunning || mixWorking || mixStale
+    val plannerBusy get() = maxRunning || mixWorking || mixStale || capRunning || capPending != null || capTouched != null || capAnswers.isNotEmpty()
 
     /** What the Planner's plan placed (id to count), its "xN rounds" estimate (0 when everything fits) and what did not fit. */
     val plannerPlaced get() = mixShown?.placed ?: emptyMap()
+    /** The cached cap of a Planner row (null when unknown, -1 when the other rows do not fit on their own) and the cap note. */
+    fun plannerCap(id: String): Int? = capCache[capKey(id)]
+    fun plannerAtCap(id: String): Boolean = plannerRows.firstOrNull { it.id == id }?.atCap ?: false
+    val plannerCapNote get() = capNote
     val plannerRounds get() = mixShown?.rounds ?: 0
     val plannerUnplaced get() = mixShown?.unplaced ?: emptyMap()
 
@@ -1813,6 +1981,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         private const val LEGEND_H = 12
         private const val FOUND_W = 28
         private const val MIX_DEBOUNCE_TICKS = 8
+        private const val CAP_CACHE_SIZE = 256
+        private const val NO_CAP = -1
+        private const val CAP_COLOR = 0xFFE0B040.toInt()
 
         private const val FOCUS_NONE = 0
         private const val FOCUS_ROW = 1

@@ -111,6 +111,7 @@ class GreenhouseMaxTest : FabricClientGameTest {
         check(bad.placedTotal == 0 && bad.unplaced.size == 2) { "skipped and unknown ids are explained: ${bad.unplaced}" }
         check(GhMax.place(null, data, ask, null).placedTotal == 0) { "null planner places nothing" }
         alongside(core, data, easy, all)
+        replanning(core, data, easy, all)
         NyAddOns.logger.info("[Greenhouse] place 12 squares x6 each: ${part.placedTotal}/${part.requestedTotal}, rounds ${part.rounds}, unplaced ${part.unplaced.size}, cells ${part.totalCells}")
     }
 
@@ -159,6 +160,86 @@ class GreenhouseMaxTest : FabricClientGameTest {
         check(around.layout != null && listOf(44, 45, 54, 55).all { around.layout!!.cells[it / 10][it % 10] == null }) { "a blocked square must stay empty" }
         val all36 = GhMax.solve(core, data, all, usable, emptySet(), 150)
         validate(core, all36, usable, all, "blocked centre")
+    }
+
+    /** Fresh re-plans: never worse than the one-pass plan, a mutation added never lowers what a fresh plan achieves, settled max results, caps, abort. */
+    private fun replanning(core: PlannerCore, data: GreenhousePlannerTest.TestData, easy: List<String>, all: List<String>) {
+        val (a, b, c) = easy
+        var better = 0
+        var cases = 0
+        for (squares in listOf(12, 16, 20, 30, 40)) {
+            val mask = GreenhousePlots.fill(squares)
+            for (n in listOf(2, 3, 5)) {
+                val asks = listOf(all.associateWith { n }, mapOf(a to n * 2, b to n, c to n), all.take(5).associateWith { n + 1 })
+                for (ask in asks) {
+                    val one = GhMax.place(core, data, ask, mask, 700)
+                    val fresh = GhMax.replan(core, data, ask, mask)
+                    validatePlace(core, fresh, mask, "replan $squares x$n")
+                    check(fresh.placedTotal >= one.placedTotal) { "replan ${fresh.placedTotal} < one pass ${one.placedTotal} ($squares squares, $ask)" }
+                    cases++
+                    if (fresh.placedTotal > one.placedTotal) better++
+                }
+            }
+        }
+        NyAddOns.logger.info("[Greenhouse] replan beat the single pass in $better of $cases cases")
+
+        // One more block: a fresh plan of the bigger set places at least as many as a fresh plan of the smaller set did, when that one fitted whole.
+        val mask = GreenhousePlots.fill(30)
+        var steps = 0
+        val amounts = LinkedHashMap<String, Int>()
+        var last = 0
+        for (round in 0 until 10) {
+            val id = easy[round % 3]
+            val before = GhMax.replan(core, data, amounts, mask)
+            amounts[id] = (amounts[id] ?: 0) + 1
+            val after = GhMax.replan(core, data, amounts, mask)
+            validatePlace(core, after, mask, "replan step $round")
+            if (before.unplaced.isEmpty()) check(after.placedTotal >= before.placedTotal) { "adding $id lowered the placed count ${before.placedTotal} -> ${after.placedTotal} with $amounts" }
+            last = after.placedTotal
+            steps++
+        }
+        NyAddOns.logger.info("[Greenhouse] replan grew a set one block at a time over $steps steps to $last placed of ${amounts.values.sum()}")
+
+        // Max results stay consistent with their re-plan: the row's amount is what is placed, the set is placed in full.
+        val m40 = GreenhousePlots.fill(40)
+        val others = mapOf(a to 2, b to 1)
+        val along = GhMax.maxAlongside(core, data, others, c, m40)
+        val settled = GhMax.settle(core, data, along, m40)
+        validatePlace(core, settled, m40, "settled alongside")
+        check(settled.placed == along.placed && settled.unplaced.isEmpty() && settled.requested == settled.placed) { "settle must keep the claimed amounts: ${settled.placed} vs ${along.placed}" }
+        check(settled.placedTotal >= along.placedTotal) { "settle must not place fewer" }
+        val solved = GhMax.solve(core, data, all, m40, emptySet(), 150)
+        val claim = GhPlaceResult(solved.counts, solved.layout, emptyMap(), solved.counts, solved.stocked, solved.totalCells)
+        val shown = GhMax.settle(core, data, claim, m40)
+        validatePlace(core, shown, m40, "settled solve")
+        check(shown.placed == solved.counts && shown.placedTotal >= claim.placedTotal) { "settled main max: ${shown.placed} vs ${solved.counts}" }
+
+        // Caps: the row max, null when the others do not fit, and it rises when another row is lowered.
+        val planner = object : dev.nytrix.nyaddons.features.greenhouse.GhPlanner {
+            override fun plan(target: dev.nytrix.nyaddons.features.greenhouse.GhMutation): GhLayout? = null
+            override fun plan(target: dev.nytrix.nyaddons.features.greenhouse.GhMutation, unlocked: BooleanArray?): GhLayout? = null
+        }
+        check(GhMax.capAlongside(planner, data, mapOf(a to 40, b to 40), c, GreenhousePlots.fill(12)) == null) { "others that do not fit give no cap" }
+        val capAlone = GhMax.capAlongside(planner, data, emptyMap(), c, m40)!!
+        val capWith = GhMax.capAlongside(planner, data, mapOf(a to 3, b to 4), c, m40)!!
+        val capLess = GhMax.capAlongside(planner, data, mapOf(a to 1), c, m40)!!
+        check(capWith <= capLess && capLess <= capAlone) { "caps must rise as the others are lowered: $capWith <= $capLess <= $capAlone" }
+        check(capAlone == GhMax.maxAlongside(core, data, emptyMap(), c, m40).placed.getValue(c)) { "cap equals the row max" }
+        check(GhMax.capAlongside(planner, data, emptyMap(), c, BooleanArray(100)) == 0) { "no squares, cap 0" }
+
+        // A superseded job stops at once.
+        val big = all.associateWith { 30 }
+        val t0 = System.nanoTime()
+        GhMax.replan(core, data, big, GreenhousePlots.fill(30), 5000) { true }
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        check(ms < 300) { "an aborted replan took $ms ms" }
+        var calls = 0
+        val t1 = System.nanoTime()
+        GhMax.replan(core, data, big, GreenhousePlots.fill(30), 5000) { ++calls > 20 }
+        check((System.nanoTime() - t1) / 1_000_000 < 1500) { "an abort part way must end the replan" }
+        val t2 = System.nanoTime()
+        val full = GhMax.replan(core, data, mapOf(a to 1), null, 5000)
+        check(full.unplaced.isEmpty() && (System.nanoTime() - t2) / 1_000_000 < 1000) { "a set that fits ends the search early" }
     }
 
     private fun validatePlace(core: PlannerCore, res: GhPlaceResult, mask: BooleanArray?, what: String) {

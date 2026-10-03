@@ -246,6 +246,63 @@ class GreenhouseScreenTest : FabricClientGameTest {
         }
     }
 
+    /** Row caps: a typed overflow snaps down to the cap with a note, + is greyed at the cap and does nothing, the cap rises when another row is lowered. */
+    private fun caps(context: ClientGameTestContext, tag: String) {
+        setBox(context, 2, "3")
+        setBox(context, 1, "60")
+        // the number stays as typed until the background check answers
+        waitPlanner(context)
+        val capped = context.computeOnClient<Int, RuntimeException> { planAmount("ashwreath") }
+        context.onClient {
+            val s = screenNow()
+            check(capped in 1..59) { "60 Ashwreath alongside 3 Cheesebite must snap down: $capped" }
+            check(s.plannerCapNote.contains("capped at $capped") && s.plannerText.contains("capped at $capped")) { "cap note: ${s.plannerCapNote} / ${s.plannerText}" }
+            check(s.plannerAtCap("ashwreath") && s.plannerCap("ashwreath") == capped) { "the row is at its cap: ${s.plannerCap("ashwreath")}" }
+            check(s.plannerPlaced == Storage.profile.greenhouse.planAmounts && s.plannerUnplaced.isEmpty()) { "the capped amounts all fit: ${s.plannerPlaced} ${s.plannerUnplaced}" }
+        }
+        context.takeScreenshot("gh-38-planner-capped-$tag")
+        click(context) { it.plannerPlusCenter(1).let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+        context.onClient { check(planAmount("ashwreath") == capped) { "+ at the cap does nothing: ${planAmount("ashwreath")} vs $capped" } }
+        // Lowering the other row raises the cap: + works again and keeps the extra block.
+        setBox(context, 2, "0")
+        waitPlanner(context)
+        click(context) { it.plannerPlusCenter(1).let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+        context.onClient {
+            val s = screenNow()
+            check(planAmount("ashwreath") == capped + 1 && s.plannerPlaced == Storage.profile.greenhouse.planAmounts) { "cap rose: ${planAmount("ashwreath")} vs $capped, placed ${s.plannerPlaced}" }
+        }
+        // A row above its cap because ANOTHER row grew keeps its amount; the growing row is the one that gets capped.
+        setBox(context, 1, "5")
+        waitPlanner(context)
+        val mine = 5
+        setBox(context, 2, "40")
+        waitPlanner(context)
+        context.onClient {
+            check(planAmount("ashwreath") == mine && planAmount("cheesebite") in 1..39) { "the other row is capped: ashwreath ${planAmount("ashwreath")} (was $mine), cheesebite ${planAmount("cheesebite")}" }
+            check(screenNow().plannerPlaced == Storage.profile.greenhouse.planAmounts) { "nothing is left unplaced: ${screenNow().plannerPlaced}" }
+        }
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+
+        // Every change plans the whole set again: add one mutation after another with rapid + presses; all fit, the layout holds them all.
+        setBox(context, 1, "3")
+        setBox(context, 2, "2")
+        waitPlanner(context)
+        repeat(3) { click(context) { it.plannerPlusCenter(5).let { p -> p[0] to p[1] } } }
+        click(context) { it.plannerPlusCenter(4).let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+        context.onClient {
+            val s = screenNow()
+            val amounts = Storage.profile.greenhouse.planAmounts
+            check(amounts.size >= 3 && s.plannerPlaced == amounts && s.plannerUnplaced.isEmpty()) { "re-plan after adding mutations: $amounts placed ${s.plannerPlaced} ${s.plannerUnplaced}" }
+        }
+        context.takeScreenshot("gh-39-planner-replanned-$tag")
+        click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
+        waitPlanner(context)
+    }
+
     private fun planAmount(id: String) = Storage.profile.greenhouse.planAmounts[id] ?: 0
 
     /** Unlocks [squares] squares (the middle first) through the Plots picker, or the default block when null. */
@@ -336,13 +393,10 @@ class GreenhouseScreenTest : FabricClientGameTest {
             click(context) { it.plannerMinusCenter(3).let { p -> p[0] to p[1] } }
             click(context) { it.plannerMinusCenter(3).let { p -> p[0] to p[1] } }
             check(planAmount("chocoberry") == 0 && "chocoberry" !in Storage.profile.greenhouse.planAmounts) { "- stops at 0: ${Storage.profile.greenhouse.planAmounts}" }
-            setBox(context, 3, "9998")
-            click(context) { it.plannerPlusCenter(3).let { p -> p[0] to p[1] } }
-            click(context) { it.plannerPlusCenter(3).let { p -> p[0] to p[1] } }
-            check(planAmount("chocoberry") == 9999) { "+ stops at 9999: ${planAmount("chocoberry")}" }
             click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
             waitPlanner(context)
         }
+        caps(context, tag)
 
         // Typed amounts: Ashwreath (row 1) and Cheesebite (row 2).
         setBox(context, 1, "3")
@@ -436,12 +490,13 @@ class GreenhouseScreenTest : FabricClientGameTest {
         click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
 
         // Amounts that do not fit: place what fits, explain the rest, estimate the rounds. Default 12 squares.
-        setSquares(context, null)
+        // (Typed amounts are capped to what fits, so the amounts are stored directly and the squares shrink under them.)
         click(context) { it.clearCenter().let { p -> p[0] to p[1] } }
-        setBox(context, 1, "9")
-        setBox(context, 2, "9")
-        setBox(context, 4, "5")
-        setBox(context, 7, "3")
+        context.onClient {
+            val plan = Storage.profile.greenhouse.planAmounts
+            plan["ashwreath"] = 9; plan["cheesebite"] = 9; plan["devourer"] = 5; plan["timestalk"] = 3
+        }
+        setSquares(context, null)
         waitPlanner(context)
         context.takeScreenshot("gh-34-planner-nofit-$tag")
         if (full) context.onClient {
