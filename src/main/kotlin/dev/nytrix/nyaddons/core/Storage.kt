@@ -52,14 +52,8 @@ class GreenhouseProfile {
     var plots = ""
 }
 
-/** What the Magic Find helper has learned for one profile: the extra MF each mob gives on top of the general number. */
-class MagicFindProfile {
-    var bonuses = mutableMapOf<String, Double>()
-}
-
 /** Data that belongs to one SkyBlock profile. */
 class ProfileData {
-    var magicFind = MagicFindProfile()
     var shards = mutableMapOf<String, ShardProgress>()
     var trackedShards = mutableListOf<String>()
     var greenhouse = GreenhouseProfile()

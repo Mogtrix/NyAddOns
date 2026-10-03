@@ -58,20 +58,6 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric).
   It reads what is on screen and sends nothing anywhere; it is how menus no mod documents get
   described when something does not line up.
 
-### Magic Find (Combat)
-- After you kill a mob that has a rare drop (base chance under 5%), a chat line shows the Magic Find
-  that applies to it. General Magic Find is read once from the tab list Stats widget and cached; only the
-  mob-specific part is added at kill time, learned from `RARE DROP!` lines. Kills in a few seconds are
-  batched, with `xN` for repeats. A setting picks no breakdown, hover breakdown or inline breakdown.
-- `/mf` opens a menu: pick a Bestiary category from the dropdown and tick the mobs you want. Everything
-  is off except King Minos, Minos Inquisitors and the highest tier of each slayer boss.
-- Click the `>` on a mob in `/mf` to list all its drops; click a drop to follow it (click again to stop).
-- `/ny trackmob <mob>` asks which drop you are going for (click one in chat, or `/ny trackmob <mob> #2`, `#all`). Kills of that
-  mob then print that drop's base odds, then the odds with your Magic Find (and Looting, where it applies).
-  Tracking many mobs can spam chat.
-- `/ny trackmob debug` lists the health-bar name tags near you and how each was read (use it if kills are not counted).
-- Kills are detected from name tags and your hits, so ranged or indirect kills can be missed.
-
 ## Commands
 
 | Command | What it does |
@@ -82,8 +68,6 @@ Hypixel SkyBlock add-ons for Minecraft Java 26.1.2 (Fabric).
 | `/hunt` or `/ny hunt` | Open the shard picker |
 | `/hunt <shard>` | Track or untrack a shard |
 | `/hunt clear` | Stop tracking all shards |
-| `/mf` or `/ny mf` | Choose which mobs show Magic Find |
-| `/ny trackmob <mob>` | Track a mob's rare drop odds (again to stop, `clear` for all) |
 
 ## Installing
 
@@ -117,8 +101,7 @@ at most once a day.
 MIT, see `LICENSE`. The config screen is [MoulConfig](https://github.com/NotEnoughUpdates/MoulConfig)
 (LGPL-3.0), bundled under a relocated package; its licence is included in the jar as
 `LICENSE_MoulConfig`. The Greenhouse crop and mutation data is downloaded from
-[SkyShards-Greenhouse](https://github.com/Campionnn/SkyShards-Greenhouse) (MIT, see `LICENSE_SkyShardsGreenhouse` in the jar). The Magic Find mob drops come from the SkyblockAPI [Repo](https://github.com/SkyblockAPI/Repo) and the Bestiary categories from
-[NotEnoughUpdates-REPO](https://github.com/NotEnoughUpdates/NotEnoughUpdates-REPO) (both MIT, see `LICENSE_SkyblockAPI-Repo` and `LICENSE_NEU-REPO` in the jar). The textures in `assets/nyaddons/moulconfig` are recoloured copies of
+[SkyShards-Greenhouse](https://github.com/Campionnn/SkyShards-Greenhouse) (MIT, see `LICENSE_SkyShardsGreenhouse` in the jar). The textures in `assets/nyaddons/moulconfig` are recoloured copies of
 MoulConfig's, and `gui/ConfigTheme.kt` swaps its panel colours for a neutral grey and blue palette.
 
 Not affiliated with Hypixel or SkyHanni. Mods are used on Hypixel at your own risk.

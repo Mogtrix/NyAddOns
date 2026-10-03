@@ -25,22 +25,6 @@
 			{
 				"adapter": "kotlin",
 				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhouseScreenTest"
-			},
-			{
-				"adapter": "kotlin",
-				"value": "dev.nytrix.nyaddons.test.magicfind.MagicFindDataTest"
-			},
-			{
-				"adapter": "kotlin",
-				"value": "dev.nytrix.nyaddons.test.magicfind.MagicFindStatsTest"
-			},
-			{
-				"adapter": "kotlin",
-				"value": "dev.nytrix.nyaddons.test.magicfind.MagicFindKillsTest"
-			},
-			{
-				"adapter": "kotlin",
-				"value": "dev.nytrix.nyaddons.test.magicfind.MagicFindWindowTest"
 			}
 		]
 	}

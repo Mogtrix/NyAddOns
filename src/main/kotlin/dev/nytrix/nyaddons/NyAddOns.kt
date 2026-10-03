@@ -134,7 +134,5 @@ object NyAddOns : ClientModInitializer {
         ChatUtils.chat("§6/hunt §7- §echoose shards to track")
         ChatUtils.chat("§6/hunt <shard> §7- §etrack or untrack a shard")
         ChatUtils.chat("§6/hunt clear §7- §estop tracking all shards")
-        ChatUtils.chat("§6/mf §7- §echoose which mobs show Magic Find")
-        ChatUtils.chat("§6/ny trackmob <mob> §7- §etrack a mob's rare drop odds")
     }
 }

@@ -6,9 +6,6 @@ import dev.nytrix.nyaddons.features.foraging.HoneyhiveTimer
 import dev.nytrix.nyaddons.features.greenhouse.GreenhouseFeature
 import dev.nytrix.nyaddons.features.greenhouse.GreenhouseStockFeature
 import dev.nytrix.nyaddons.features.hunting.FusionTracker
-import dev.nytrix.nyaddons.features.magicfind.MagicFindKillsFeature
-import dev.nytrix.nyaddons.features.magicfind.MagicFindStatsFeature
-import dev.nytrix.nyaddons.features.magicfind.MagicFindWindowFeature
 import dev.nytrix.nyaddons.features.hunting.FusionTree
 import dev.nytrix.nyaddons.features.hunting.ShardTracker
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource
@@ -40,8 +37,5 @@ object Features {
         FusionTree,
         GreenhouseStockFeature,
         GreenhouseFeature,
-        MagicFindStatsFeature,
-        MagicFindKillsFeature,
-        MagicFindWindowFeature,
     )
 }
