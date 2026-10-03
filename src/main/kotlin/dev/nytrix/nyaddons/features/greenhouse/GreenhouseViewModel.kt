@@ -22,7 +22,7 @@ fun nextMilestone(analysedCount: Int): Milestone? {
     return null
 }
 
-/** Cheapest to analyse first: coins, then copper, then name. */
+/** Cheapest to analyse first (the order the checklist uses; the costs themselves are not shown), then by name. */
 fun uniqueOrder(mutations: List<GhMutation>): List<GhMutation> =
     mutations.filter { it.id !in GreenhouseGoals.skippedMutations }.sortedWith(compareBy<GhMutation> { it.analysisCoins }.thenBy { it.analysisCopper }.thenBy { it.name })
 
@@ -38,11 +38,6 @@ fun formatAmount(value: Long): String {
         value >= 1_000L -> scaled(1_000L, "k")
         else -> value.toString()
     }
-}
-
-fun costText(m: GhMutation): String = when {
-    m.analysisCoins <= 0 && m.analysisCopper <= 0 -> "unknown"
-    else -> "${formatAmount(m.analysisCoins)} coins, ${formatAmount(m.analysisCopper.toLong())} copper"
 }
 
 /** Minecraft colour code for a rarity name. */
@@ -72,12 +67,6 @@ fun ingredientState(m: GhMutation, data: GhData, stock: GhStock, amount: Int = 1
     return if (missing) 1 else if (known) 2 else 0
 }
 
-/** One line of the Rose Dragon needs list. [need] 0 marks an informational line (no colouring). */
-data class NeedLine(val label: String, val have: Int?, val need: Int, val indent: Int, val heading: Boolean)
-
-const val HELIANTHUS_PER_CONDENSED = GreenhouseGoals.HELIANTHUS_PER_CONDENSED
-val ROSE_DRAGON_MUTATIONS get() = GreenhouseGoals.roseDragonMutations
-
 private fun squash(s: String) = s.filter { it.isLetterOrDigit() }.lowercase()
 
 fun findMutation(data: GhData, name: String): GhMutation? {
@@ -85,35 +74,19 @@ fun findMutation(data: GhData, name: String): GhMutation? {
     return data.mutations.firstOrNull { squash(it.name) == key }
 }
 
-fun requirementLines(m: GhMutation, data: GhData, stock: GhStock, indent: Int): List<NeedLine> =
-    m.requirements.map { r ->
-        val name = data.nameOf(r.crop)
-        NeedLine("${r.count}x $name", stock.count(name), 0, indent, false)
-    }
+/** One line of the browser's detail pane: an optional [icon] id, then the text (with colour codes). */
+data class DetailLine(val icon: String?, val text: String)
 
-fun roseDragonNeeds(data: GhData, stock: GhStock): List<NeedLine> = buildList {
-    add(NeedLine("Condensed Helianthus", stock.count("Condensed Helianthus"), GreenhouseGoals.CONDENSED_NEEDED, 0, true))
-    add(NeedLine("Helianthus (${GreenhouseGoals.CONDENSED_NEEDED} x $HELIANTHUS_PER_CONDENSED)", stock.count("Helianthus"), GreenhouseGoals.CONDENSED_NEEDED * HELIANTHUS_PER_CONDENSED, 1, false))
-    for (name in ROSE_DRAGON_MUTATIONS) {
-        add(NeedLine(name, stock.count(name), 1, 0, true))
-        findMutation(data, name)?.let { addAll(requirementLines(it, data, stock, 1)) }
-    }
-}
-
-/** Short lines describing a mutation for the browser's detail pane. */
-fun detailLines(m: GhMutation, data: GhData, stock: GhStock): List<String> = buildList {
-    add("${rarityCode(m.rarity)}${prettify(m.rarity)} ${m.name}")
-    add("§7Size §f${m.size}x${m.size}§7, soil §f${prettify(m.soil)}")
-    add("§7Growth stages §f${m.growthStages}")
-    add("§7Watering §f${if (m.requiresWatering) "required" else "not needed"}")
-    add("§7Analysis §e${formatAmount(m.analysisCoins)} §7coins")
-    add("§7         §e${formatAmount(m.analysisCopper.toLong())} §7copper")
-    if (m.firstAnalysisCopper > 0) add("§7First time §e${formatAmount(m.firstAnalysisCopper.toLong())} §7copper")
-    add("§7Requires nearby:")
+/** The lines describing a mutation for the browser's detail pane: facts, then what must grow next to it with what is held. */
+fun detailLines(m: GhMutation, data: GhData, stock: GhStock): List<DetailLine> = buildList {
+    add(DetailLine(null, "§7Size §f${m.size}x${m.size}§7, soil §f${prettify(m.soil)}"))
+    add(DetailLine(null, "§7Growth stages §f${m.growthStages}"))
+    add(DetailLine(null, "§7Watering §f${if (m.requiresWatering) "required" else "not needed"}"))
+    add(DetailLine(null, "§7Requires nearby:"))
     for (r in m.requirements) {
         val name = data.nameOf(r.crop)
         val have = stock.count(name)
         val tail = if (have == null) "" else if (have > 0) " §a($have)" else " §c(0)"
-        add("§f ${r.count}x $name$tail")
+        add(DetailLine(r.crop, "§f${r.count}x $name$tail"))
     }
 }

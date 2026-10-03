@@ -15,7 +15,7 @@ import dev.nytrix.nyaddons.features.greenhouse.GreenhouseTree
 import dev.nytrix.nyaddons.features.greenhouse.GhStock
 import dev.nytrix.nyaddons.features.greenhouse.Greenhouse
 import dev.nytrix.nyaddons.features.greenhouse.GreenhouseScreen
-import dev.nytrix.nyaddons.features.greenhouse.roseDragonNeeds
+import dev.nytrix.nyaddons.features.greenhouse.GhIcons
 import net.minecraft.client.input.CharacterEvent
 import net.minecraft.client.input.KeyEvent
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
@@ -103,6 +103,11 @@ class GreenhouseScreenTest : FabricClientGameTest {
     }
 
     private fun run(context: ClientGameTestContext) {
+        // Real head skins from a local fixture, so the test does not need the network.
+        val fixture = java.util.Properties().apply {
+            GreenhouseScreenTest::class.java.getResourceAsStream("/gh_icons_fixture.properties")!!.use { load(it) }
+        }.entries.associate { it.key.toString() to it.value.toString() }
+        GhIcons.useTextures(fixture)
         context.input.resizeWindow(854, 480)
         context.onClient {
             Greenhouse.data = fakeData
@@ -119,6 +124,16 @@ class GreenhouseScreenTest : FabricClientGameTest {
         check(screen(context).view == GreenhouseView.UNIQUE_MUTATIONS)
         context.takeScreenshot("gh-1-unique-854")
         checkHeader(context, "Mutations found 0/38")
+        noCosts(context)
+        // The open dropdown covers the icons below it.
+        click(context) { it.dropdownCenter().let { p -> p[0] to p[1] } }
+        context.waitTicks(2)
+        context.takeScreenshot("gh-26-dropdown-854")
+        click(context) { it.dropdownOptionCenter(0).let { p -> p[0] to p[1] } }
+        context.onClient {
+            check(screenNow().iconsDrawn >= 8) { "every unique row should draw an icon: ${screenNow().iconsDrawn}" }
+            check(GhIcons.has("ashwreath") && GhIcons.has("wheat"))
+        }
 
         // Ticking the cheapest row (Ashwreath).
         click(context) { it.checkboxX() to it.uniqueRowY(0) }
@@ -130,15 +145,15 @@ class GreenhouseScreenTest : FabricClientGameTest {
         checkHeader(context, "Mutations found 1/38")
         uniqueAmounts(context)
         context.takeScreenshot("gh-9-unique-amounts-854")
+        maxRun(context, "gh-19-max-854")
 
         // Dropdown: Rose Dragon.
         pickView(context, 1)
         context.onClient { check(NyAddOns.config.garden.greenhouse.view == GreenhouseView.ROSE_DRAGON) { "view not remembered" } }
         check(screen(context).view == GreenhouseView.ROSE_DRAGON)
-        val helianthus = roseDragonNeeds(fakeData, fakeStock).first { it.label.startsWith("Helianthus") }
-        check(helianthus.need == 45) { "Rose Dragon should need 45 Helianthus, got ${helianthus.need}" }
         context.waitTicks(3)
         context.takeScreenshot("gh-3-rose-854")
+        noCosts(context)
         roseTree(context)
         plotsPicker(context)
 
@@ -147,12 +162,16 @@ class GreenhouseScreenTest : FabricClientGameTest {
         context.onClient { check(NyAddOns.config.garden.greenhouse.view == GreenhouseView.ALL_MUTATIONS) }
         context.waitTicks(3)
         context.takeScreenshot("gh-4-all-854")
+        noCosts(context)
         click(context) { it.allRowCenter(3).let { p -> p[0] to p[1] } }
         context.waitTicks(3)
         click(context) { it.planButtonCenter().let { p -> p[0] to p[1] } }
         context.waitTicks(10)
         context.takeScreenshot("gh-5-layout-854")
-        context.onClient { check(screenNow().hasLayout) { "Plan layout did not produce a layout" } }
+        context.onClient {
+            check(screenNow().hasLayout) { "Plan layout did not produce a layout" }
+            check(screenNow().iconsDrawn >= 12) { "the layout grid and the list should draw icons: ${screenNow().iconsDrawn}" }
+        }
 
         // Bigger window.
         context.input.resizeWindow(1280, 720)
@@ -167,22 +186,95 @@ class GreenhouseScreenTest : FabricClientGameTest {
         context.takeScreenshot("gh-8-rose-1280")
         checkHeader(context, "Mutations found 1/38")
         // Tree with a layout in the side panel, and the Plots picker, in the bigger window.
-        click(context) { it.treeArrowCenter(2).let { p -> p[0] to p[1] } }
-        click(context) { it.treeTextCenter(1).let { p -> p[0] to p[1] } }
+        click(context) { it.treeArrowCenter(1).let { p -> p[0] to p[1] } }
+        click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
         context.waitTicks(15)
         context.takeScreenshot("gh-13-rose-panel-1280")
         click(context) { it.plotsButtonCenter().let { p -> p[0] to p[1] } }
         context.waitTicks(3)
         context.takeScreenshot("gh-14-plots-1280")
+        click(context) { it.donePlotsCenter().let { p -> p[0] to p[1] } }
+        pickView(context, 0)
+        maxRun(context, "gh-20-max-1280")
+
+        // The size people play in: a 1708x960 window at GUI scale 2 is an 854x480 GUI, which GUI scale 1 gives here.
+        context.input.resizeWindow(854, 480)
+        context.onClient { it.options.guiScale().set(1); it.resizeGui() }
+        context.waitTicks(10)
+        context.takeScreenshot("gh-21-unique-gui854")
+        checkHeader(context, "Mutations found 1/38")
+        pickView(context, 1)
+        click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
+        context.waitTicks(15)
+        context.takeScreenshot("gh-22-rose-panel-gui854")
+        pickView(context, 2)
+        click(context) { it.allRowCenter(3).let { p -> p[0] to p[1] } }
+        click(context) { it.planButtonCenter().let { p -> p[0] to p[1] } }
+        context.waitTicks(10)
+        context.takeScreenshot("gh-23-all-gui854")
+        click(context) { it.plotsButtonCenter().let { p -> p[0] to p[1] } }
+        context.waitTicks(3)
+        context.takeScreenshot("gh-24-plots-gui854")
+        click(context) { it.donePlotsCenter().let { p -> p[0] to p[1] } }
+        pickView(context, 0)
+        maxRun(context, "gh-25-max-gui854")
+        context.onClient { it.options.guiScale().set(0); it.resizeGui() }
         context.setScreen { null }
         context.input.resizeWindow(854, 480)
+    }
+
+    /** No coin or copper text anywhere in the current view. */
+    private fun noCosts(context: ClientGameTestContext) {
+        context.onClient {
+            val text = screenNow().allVisibleText().lowercase()
+            check(!text.contains("coin") && !text.contains("copper")) { "cost text is still shown: $text" }
+        }
+    }
+
+    /** The Max button: working state, the amounts overwritten with the counts, the layout and the summary in the side panel. */
+    private fun maxRun(context: ClientGameTestContext, shot: String) {
+        // Give every mutation 7 first so the overwrite is visible, then Max.
+        click(context) { it.setAllCenter().let { p -> p[0] to p[1] } }
+        typeDigits(context, "7")
+        pressKey(context, 256)
+        click(context) { it.maxButtonCenter().let { p -> p[0] to p[1] } }
+        context.onClient { check(screenNow().maxPanelShown) { "the Max button did not open the Max panel" } }
+        var waited = 0
+        while (context.computeOnClient<Boolean, RuntimeException> { screenNow().maxBusy } && waited < 200) {
+            context.waitTicks(2)
+            waited += 2
+        }
+        context.waitTicks(3)
+        context.onClient {
+            val s = screenNow()
+            check(!s.maxBusy) { "Max never finished" }
+            check(s.maxSummaryText.startsWith("Max: ")) { "summary: '${s.maxSummaryText}'" }
+            val counts = s.maxPlaced
+            for (m in mutations) check(amount(m.id) == (counts[m.id] ?: 0)) { "${m.id}: amount ${amount(m.id)} but Max says ${counts[m.id]}" }
+            if (counts.isNotEmpty()) {
+                check(s.maxBlockIds.isNotEmpty() && s.iconsDrawn > 0) { "Max layout has no blocks or icons" }
+                check(s.maxSummaryText.contains("${counts.values.sum()} mutations (${counts.size} kind")) { "summary: '${s.maxSummaryText}'" }
+            }
+            check(s.maxText.contains("Max:")) { "side panel text: '${s.maxText}'" }
+            val text = s.allVisibleText().lowercase()
+            check(!text.contains("coin") && !text.contains("copper")) { "cost text after Max: $text" }
+            NyAddOns.logger.info("[Greenhouse] test Max: ${s.maxSummaryText} counts=${s.maxPlaced} text=${s.maxText.replace('\n', '|')}")
+        }
+        context.takeScreenshot(shot)
+        // Boxes stay editable: type into the first row's box.
+        click(context) { it.amountBoxCenter(0).let { p -> p[0] to p[1] } }
+        typeDigits(context, "9")
+        context.onClient { check(amount("ashwreath") == 9) { "the first row box should take typing after Max: ${amount("ashwreath")}" } }
+        pressKey(context, 256)
+        context.onClient { Storage.profile.greenhouse.amounts = mutableMapOf() }
+        context.waitTicks(22)
     }
 
     private fun checkHeader(context: ClientGameTestContext, found: String) {
         context.onClient {
             val s = screenNow()
             val text = s.headerText()
-            check(text[0].startsWith("Rose Dragon ~") && text[0].endsWith("% (rough estimate)")) { "Rose Dragon line: ${text[0]}" }
+            check(text[0].startsWith("Rose Dragon ~") && text[0].endsWith("%")) { "Rose Dragon line: ${text[0]}" }
             check(text[1] == found) { "found line: ${text[1]} (wanted $found)" }
             check(text[3] == "Shellfruit and Jerryflower are not included yet: the mod is being updated for them.") { "disclaimer: ${text[3]}" }
             check(s.headerFits()) { "the header does not fit this window size: $text" }
@@ -259,20 +351,25 @@ class GreenhouseScreenTest : FabricClientGameTest {
     private fun roseTree(context: ClientGameTestContext) {
         fun tree() = context.computeOnClient<List<String>, RuntimeException> { screenNow().treeText() }
         val start = tree()
-        check(start.size == 6 && start[0] == "> Condensed Helianthus 2/5" && start[1].startsWith("> Glasscorn 1/1")) { "collapsed tree: $start" }
-        click(context) { it.treeArrowCenter(2).let { p -> p[0] to p[1] } }
+        check(start.size == 5 && start[0].startsWith("> Glasscorn 1/1") && start.none { it.contains("Condensed") }) { "collapsed tree (no Condensed Helianthus row): $start" }
+        context.onClient {
+            check(screenNow().treeIcons() == listOf("glasscorn", "devourer", "all_in_aloe", "phantomleaf", "timestalk")) { "tree icons ${screenNow().treeIcons()}" }
+            check(screenNow().iconsDrawn >= 5) { "icons in the tree: ${screenNow().iconsDrawn}" }
+        }
+        click(context) { it.treeArrowCenter(1).let { p -> p[0] to p[1] } }
         val devourer = tree()
-        check(devourer.size == 8 && devourer[2].startsWith("v Devourer") && devourer[3] == "  x2 Wheat 640/2" && devourer[4] == "  > x2 Ashwreath 0/2") { "Devourer expanded: $devourer" }
-        click(context) { it.treeArrowCenter(4).let { p -> p[0] to p[1] } }
+        check(devourer.size == 7 && devourer[1].startsWith("v Devourer") && devourer[2] == "  x2 Wheat 640/2" && devourer[3] == "  > x2 Ashwreath 0/2") { "Devourer expanded: $devourer" }
+        click(context) { it.treeArrowCenter(3).let { p -> p[0] to p[1] } }
         val deep = tree()
-        check(deep.size == 9 && deep[5] == "    x4 Nether Wart 12/4") { "Ashwreath expanded: $deep" }
+        check(deep.size == 8 && deep[4] == "    x4 Nether Wart 12/4") { "Ashwreath expanded: $deep" }
+        context.onClient { check(screenNow().treeIcons().contains("nether_wart")) }
         context.takeScreenshot("gh-11-rose-tree-854")
-        click(context) { it.treeArrowCenter(2).let { p -> p[0] to p[1] } }
-        check(tree().size == 6) { "collapsing Devourer should hide its ingredients: ${tree()}" }
-        click(context) { it.treeArrowCenter(2).let { p -> p[0] to p[1] } }
+        click(context) { it.treeArrowCenter(1).let { p -> p[0] to p[1] } }
+        check(tree().size == 5) { "collapsing Devourer should hide its ingredients: ${tree()}" }
+        click(context) { it.treeArrowCenter(1).let { p -> p[0] to p[1] } }
 
         // Picking the two Ashwreath: needs 2, the fake layout makes one per round.
-        click(context) { it.treeTextCenter(4).let { p -> p[0] to p[1] } }
+        click(context) { it.treeTextCenter(3).let { p -> p[0] to p[1] } }
         context.waitTicks(15)
         context.onClient {
             val s = screenNow()
@@ -283,14 +380,16 @@ class GreenhouseScreenTest : FabricClientGameTest {
             val mask = GreenhousePlots.current()
             for (r in 0 until 10) for (c in 0 until 10) check(layout.cells[r][c] == null || mask[r * 10 + c]) { "layout uses locked square $r,$c" }
         }
+        context.waitTicks(2)
+        context.onClient { check(screenNow().iconsDrawn >= 8) { "the plot grid and legend should draw icons: ${screenNow().iconsDrawn}" } }
         context.takeScreenshot("gh-12-rose-panel-854")
-        click(context) { it.treeTextCenter(1).let { p -> p[0] to p[1] } }
+        click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
         context.waitTicks(15)
         context.onClient {
             val s = screenNow()
             check(s.panelItem == "Glasscorn x1" && s.panelRoundCount == 1 && s.panelHasLayout) { "Glasscorn panel: ${s.panelItem} ${s.panelRoundCount}" }
         }
-        click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
+        click(context) { it.treeTextCenter(2).let { p -> p[0] to p[1] } }
         context.waitTicks(3)
         context.onClient {
             val s = screenNow()
@@ -301,12 +400,12 @@ class GreenhouseScreenTest : FabricClientGameTest {
         context.onClient { fakeStock.items["wheat"] = 7; fakeStock.updated = System.currentTimeMillis() }
         context.waitTicks(4)
         val fresh = tree()
-        check(fresh[3] == "  x2 Wheat 7/2") { "tree did not pick up the new Wheat count: $fresh" }
+        check(fresh[2] == "  x2 Wheat 7/2") { "tree did not pick up the new Wheat count: $fresh" }
         context.onClient { fakeStock.items["wheat"] = 640; fakeStock.updated = System.currentTimeMillis() - 5 * 60_000 }
         context.waitTicks(4)
 
-        click(context) { it.treeTextCenter(1).let { p -> p[0] to p[1] } }
-        click(context) { it.treeTextCenter(1).let { p -> p[0] to p[1] } }
+        click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
+        click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
         context.waitTicks(3)
         check(context.computeOnClient<String?, RuntimeException> { screenNow().panelItem } == null) { "clicking the picked item again should close the panel" }
         val percent = GreenhouseTree.percent(fakeData, fakeStock)
@@ -357,14 +456,14 @@ class GreenhouseScreenTest : FabricClientGameTest {
         }
         context.takeScreenshot("gh-17-unique-flags-854")
         pickView(context, 1)
-        click(context) { it.treeTextCenter(1).let { p -> p[0] to p[1] } }
+        click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
         context.waitTicks(15)
         context.onClient {
             val s = screenNow()
             check(!s.panelHasLayout && s.panelMessage.contains("5 more squares")) { "panel with 3 squares: '${s.panelMessage}'" }
         }
         context.takeScreenshot("gh-18-rose-nofit-854")
-        click(context) { it.treeTextCenter(1).let { p -> p[0] to p[1] } }
+        click(context) { it.treeTextCenter(0).let { p -> p[0] to p[1] } }
         click(context) { it.plotsButtonCenter().let { p -> p[0] to p[1] } }
         click(context) { it.defaultPlotsCenter().let { p -> p[0] to p[1] } }
         click(context) { it.donePlotsCenter().let { p -> p[0] to p[1] } }
