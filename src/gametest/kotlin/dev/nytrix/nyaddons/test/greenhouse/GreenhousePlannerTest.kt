@@ -7,6 +7,7 @@ import dev.nytrix.nyaddons.features.greenhouse.GhData
 import dev.nytrix.nyaddons.features.greenhouse.GhLayout
 import dev.nytrix.nyaddons.features.greenhouse.GhMutation
 import dev.nytrix.nyaddons.features.greenhouse.GhRequirement
+import dev.nytrix.nyaddons.features.greenhouse.GhReuse
 import dev.nytrix.nyaddons.features.greenhouse.GreenhousePlots
 import dev.nytrix.nyaddons.features.greenhouse.PlannerCore
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest
@@ -99,6 +100,84 @@ class GreenhousePlannerTest : FabricClientGameTest {
         }
         check(data.mutations.all { core.plan(it, BooleanArray(100)) == null }) { "nothing can be planned with every square locked" }
         check(data.mutations.count { core.plan(it, GreenhousePlots.all()) != null } >= planned - 2) { "an all-unlocked mask should plan about as many as no mask" }
+        // Extending a picture that already holds the target's ring crops should reuse them: a second block needs fewer new squares than a first.
+        fun filled(l: GhLayout) = l.cells.sumOf { row -> row.count { it != null } }
+        var fresh = 0
+        var added = 0
+        var extended = 0
+        for (m in data.mutations) {
+            if (!core.targetable(m.id)) continue
+            val first = core.extend(null, m, null, 0) ?: continue
+            val second = core.extend(first, m, null, 0) ?: continue
+            extended++
+            check(core.spawns(second, m.id)) { "${m.id}: extended layout does not spawn it\n${dump(second)}" }
+            check(filled(second) > filled(first)) { "${m.id}: extending added nothing" }
+            fresh += filled(first)
+            added += filled(second) - filled(first)
+        }
+        NyAddOns.logger.info("[Greenhouse] planner reuse: $extended second blocks added $added squares vs $fresh for the first blocks")
+        check(extended >= 20) { "only $extended mutations could be extended" }
+        check(added < fresh) { "second blocks added $added squares, first blocks needed $fresh: ring crops are not reused" }
+        // Reuse placement (core.reuseEnabled) over many base pictures: every attempt keeps the base, stays inside the mask (unlocked
+        // minus blocked), spawns the target, and the 8 attempts still give more than one distinct layout. The same pairs are then run
+        // with reuse off and the totals compared (best-of-8 new squares, summed over all base/target pairs).
+        val blockedSq = BooleanArray(100).also { for (i in 0 until 100 step 7) it[i] = true }
+        val reuseMask = GreenhousePlots.usable(GreenhousePlots.fill(70), blockedSq)
+        var pairs = 0
+        var bestSum = 0
+        var attemptSum = 0
+        var attemptCount = 0
+        var lowVariety = 0
+        for (mask in listOf<BooleanArray?>(null, reuseMask)) {
+            val bases = data.mutations.filter { core.targetable(it.id) }.mapNotNull { m -> core.extend(null, m, mask, 0)?.let { m to it } }
+            for ((bm, base) in bases.filterIndexed { i, _ -> i % 4 == 0 }) for (m in data.mutations) {
+                if (!core.targetable(m.id)) continue
+                val results = (0 until 8).mapNotNull { a -> core.extend(base, m, mask, a) }
+                if (results.isEmpty()) continue
+                for (r in results) {
+                    check(core.spawns(r, m.id)) { "${m.id} on ${bm.id}: reuse layout does not spawn it\n${dump(r)}" }
+                    for (rr in 0 until 10) for (cc in 0 until 10) {
+                        val b = base.cells[rr][cc]
+                        check(b == null || r.cells[rr][cc] == b) { "${m.id} on ${bm.id}: base square $rr,$cc was changed" }
+                        if (mask != null) check(b != null || r.cells[rr][cc] == null || mask[rr * 10 + cc]) { "${m.id} on ${bm.id}: uses locked/blocked square $rr,$cc" }
+                    }
+                    attemptSum += filled(r) - filled(base)
+                    attemptCount++
+                }
+                pairs++
+                NyAddOns.logger.info("[Greenhouse] reusepair ${if (mask == null) "free" else "mask"} ${bm.id}+${m.id} ${results.minOf { filled(it) - filled(base) }}")
+                bestSum += results.minOf { filled(it) - filled(base) }
+                if (results.map { dump(it) }.toSet().size < 2 && results.size >= 4) lowVariety++
+            }
+        }
+        // The reuse readout: an extension keeps every base square, so reused = base squares and added = the new ones.
+        val one = core.extend(null, data.mutations.first { core.targetable(it.id) }, null, 0)!!
+        val two = data.mutations.firstNotNullOf { m -> if (core.targetable(m.id)) core.extend(one, m, null, 0) else null }
+        val kept = GhReuse.of(one, two)!!
+        check(kept.reused == filled(one) && kept.added == filled(two) - filled(one)) { "reuse count ${kept.reused}/${kept.added}, expected ${filled(one)}/${filled(two) - filled(one)}" }
+        check(GhReuse.of(null, two) == null && GhReuse.of(GhLayout(10, Array(10) { arrayOfNulls<String>(10) }, ""), two) == null) { "no base picture must give no readout" }
+        val moved = GhReuse.of(two, one)!!
+        check(moved.reused + moved.added == filled(one)) { "reuse + new must equal the squares of the new layout" }
+        NyAddOns.logger.info("[Greenhouse] reuseAt: $pairs pairs, best-of-8 new squares $bestSum, mean per attempt ${attemptSum.toFloat() / attemptCount}, low variety $lowVariety")
+        // Old placement over the same pairs, for comparison.
+        core.reuseEnabled = false
+        var oldBestSum = 0
+        var oldPairs = 0
+        for (mask in listOf<BooleanArray?>(null, reuseMask)) {
+            val bases = data.mutations.filter { core.targetable(it.id) }.mapNotNull { m -> core.extend(null, m, mask, 0)?.let { m to it } }
+            for ((_, base) in bases.filterIndexed { i, _ -> i % 4 == 0 }) for (m in data.mutations) {
+                if (!core.targetable(m.id)) continue
+                val results = (0 until 8).mapNotNull { a -> core.extend(base, m, mask, a) }
+                if (results.isEmpty()) continue
+                oldPairs++
+                oldBestSum += results.minOf { filled(it) - filled(base) }
+            }
+        }
+        core.reuseEnabled = true
+        NyAddOns.logger.info("[Greenhouse] reuse on: best-of-8 new squares $bestSum over $pairs pairs; reuse off: $oldBestSum over $oldPairs pairs")
+        check(bestSum.toFloat() / pairs <= oldBestSum.toFloat() / oldPairs) { "reuse placement needs $bestSum new squares over $pairs pairs, old placement $oldBestSum over $oldPairs" }
+        check(pairs >= 100) { "only $pairs base/target pairs could be extended" }
+        check(lowVariety * 10 <= pairs) { "$lowVariety of $pairs pairs gave one identical layout for every attempt" }
         check(planned >= 36, "only $planned of 40 mutations got a layout; null: $nulls")
         check(selfContained.size >= 12, "only ${selfContained.size} self-contained layouts: $selfContained")
     }

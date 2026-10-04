@@ -78,8 +78,11 @@ class PinnedContent(pin: PinnedPlot, example: Boolean) : OverlayContent {
     private val blockSpan: IntArray
     private val blockId: Array<String>
     private val blockMutation: BooleanArray
+    private val blockSoil: Array<String>
     private val legendIds: Array<String>
     private val legendNames: Array<String>
+    private val soils: Array<String>
+    private val soilNames: Array<String>
     private val title: String
     private val summary: List<String>
     private val rows: Int
@@ -135,8 +138,11 @@ class PinnedContent(pin: PinnedPlot, example: Boolean) : OverlayContent {
         blockSpan = spans.toIntArray()
         blockId = ids.toTypedArray()
         blockMutation = BooleanArray(ids.size) { data.mutation(ids[it]) != null }
+        blockSoil = Array(ids.size) { data.mutation(ids[it])?.soil ?: data.crops.firstOrNull { c -> c.id == ids[it] }?.soil ?: "" }
         legendIds = legend.toTypedArray()
-        legendNames = Array(legendIds.size) { if (data.ready) data.nameOf(legendIds[it]) else legendIds[it] }
+        legendNames = Array(legendIds.size) { if (data.ready) data.nameOf(legendIds[it]) else prettify(legendIds[it]) }
+        soils = blockSoil.filter { it.isNotEmpty() }.distinct().toTypedArray()
+        soilNames = Array(soils.size) { prettify(soils[it]) }
 
         val gridW = cols * CELL + 1
         title = if (example) "§7Pinned plot (example)" else "§e${pin.title}"
@@ -156,11 +162,12 @@ class PinnedContent(pin: PinnedPlot, example: Boolean) : OverlayContent {
         summary = lines
         for (line in lines) widest = maxOf(widest, font.width(line))
         for (name in legendNames) widest = maxOf(widest, ICON + 3 + font.width(name))
+        for (name in soilNames) widest = maxOf(widest, ICON + 3 + font.width(name))
         width = widest + PAD * 2
         gridX = PAD + (widest - gridW) / 2
         gridY = PAD + 11 + lines.size * 9 + 2
         legendY = gridY + rows * CELL + 1 + 4
-        height = legendY + legendIds.size * LEGEND_H + PAD - 1
+        height = legendY + (legendIds.size + soils.size) * LEGEND_H + PAD - 1
     }
 
     override fun draw(graphics: GuiGraphicsExtractor) {
@@ -174,7 +181,11 @@ class PinnedContent(pin: PinnedPlot, example: Boolean) : OverlayContent {
             val size = blockSpan[b] * CELL
             val x = gridX + blockCol[b] * CELL
             val y = gridY + blockRow[b] * CELL
-            graphics.fill(x + 1, y + 1, x + size, y + size, if (blockMutation[b]) MUTATION_FILL else CROP_FILL)
+            graphics.fill(x + 1, y + 1, x + size, y + size, GhSoil.color(blockSoil[b]))
+            graphics.fill(x + 1, y + 1, x + size, y + 2, GhSoil.LIGHT)
+            graphics.fill(x + 1, y + size - 1, x + size, y + size, GhSoil.SHADE)
+            if (blockMutation[b]) graphics.fill(x + size - 4, y + 2, x + size - 1, y + 5, GhSoil.MUTATION_PIP)
+            if (size >= 28) graphics.text(font, GhSoil.letter(blockSoil[b]), x + 3, y + size - 9, GhSoil.letterColor(blockSoil[b]), false)
             val icon = size - 4
             GhIcons.draw(graphics, blockId[b], x + 2, y + 2, icon)
         }
@@ -182,6 +193,14 @@ class PinnedContent(pin: PinnedPlot, example: Boolean) : OverlayContent {
             val y = legendY + i * LEGEND_H
             GhIcons.draw(graphics, legendIds[i], PAD, y, ICON)
             graphics.text(font, legendNames[i], PAD + ICON + 3, y + 1, WHITE, true)
+        }
+        // Soil key: HUD blocks are too small for badges and light soils (sand, end stone) look alike, so colour and letter are named here.
+        for (i in soils.indices) {
+            val y = legendY + (legendIds.size + i) * LEGEND_H
+            graphics.fill(PAD, y, PAD + ICON, y + ICON, GhSoil.EDGE)
+            graphics.fill(PAD + 1, y + 1, PAD + ICON - 1, y + ICON - 1, GhSoil.color(soils[i]))
+            graphics.text(font, GhSoil.letter(soils[i]), PAD + 3, y + 1, GhSoil.letterColor(soils[i]), false)
+            graphics.text(font, soilNames[i], PAD + ICON + 3, y + 1, WHITE, true)
         }
     }
 
@@ -194,7 +213,5 @@ class PinnedContent(pin: PinnedPlot, example: Boolean) : OverlayContent {
         const val BACKGROUND = 0xA0101010.toInt()
         const val GRID_LINE = 0xFF3A3A3A.toInt()
         const val EMPTY_CELL = 0xFF2A2A2A.toInt()
-        const val MUTATION_FILL = 0xFF45305E.toInt()
-        const val CROP_FILL = 0xFF2A5A34.toInt()
     }
 }

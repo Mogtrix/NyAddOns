@@ -33,6 +33,10 @@
 			{
 				"adapter": "kotlin",
 				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhouseIconsTest"
+			},
+			{
+				"adapter": "kotlin",
+				"value": "dev.nytrix.nyaddons.test.greenhouse.GreenhouseSoilTest"
 			}
 		]
 	}

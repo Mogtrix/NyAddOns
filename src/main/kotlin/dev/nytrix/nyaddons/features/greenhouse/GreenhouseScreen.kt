@@ -208,6 +208,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private var mixDirtyAt = 0
     private var mixShown: GhPlaceResult? = null
     private var mixPictureFor: GhPlaceResult? = null
+    private var reuseBase: GhLayout? = null
+    private var reuseLine = ""
 
     // Row caps: the most a row can take alongside the OTHER rows' amounts (the row max computation), found in the background and
     // cached per (other rows' amounts, squares, One of each). Only a heuristic: "no more fit" means our greedy search found none.
@@ -968,8 +970,35 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             }
             x += entry + 8
         }
-        return if (shown.legendIds.isEmpty()) 0 else lines * LEGEND_H
+        if (shown.legendIds.isEmpty()) return 0
+        return lines * LEGEND_H + soilKeyHeight(shown, maxW)
     }
+
+    /** Height in pixels of the soil key of [shown] in a [maxW] wide box (0 when no soil is known). */
+    private fun soilKeyHeight(shown: Picture, maxW: Int): Int {
+        val soils = soilsOf(shown)
+        if (soils.isEmpty()) return 0
+        var soilLines = 1
+        var x = 0
+        for (soil in soils) {
+            val entry = LEGEND_ICON + 3 + font.width(prettify(soil))
+            if (x > 0 && x + entry > maxW) {
+                soilLines++
+                x = 0
+            }
+            x += entry + 8
+        }
+        return soilLines * LEGEND_H
+    }
+
+    /** The soil a crop or mutation grows on, from the Greenhouse data ("" when unknown). */
+    private fun soilOf(id: String): String {
+        val data = Greenhouse.data
+        return data.mutation(id)?.soil ?: data.crops.firstOrNull { it.id == id }?.soil ?: ""
+    }
+
+    /** The distinct soils under the plants of [shown], in order of first appearance. */
+    private fun soilsOf(shown: Picture): List<String> = shown.blockId.map { soilOf(it) }.filter { it.isNotEmpty() }.distinct()
 
     /**
      * Draws [shown] in a box of [maxW] x [maxH] pixels: the grid with square cells as large as fits, then the legend (icon and
@@ -998,15 +1027,15 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
                 cell = minOf(maxW / cols, (maxH - legendH) / rows).coerceAtMost(30)
             }
             if (cell < 10) {
-                // No room for the legend either: the grid gets everything and the names show on hover.
+                // No room for the crop names (they show on hover), but the soil key stays: the colours need it.
                 withLegend = false
-                cell = minOf(maxW / cols, maxH / rows).coerceIn(5, 30)
+                cell = minOf(maxW / cols, (maxH - soilKeyHeight(shown, maxW) - 4) / rows).coerceIn(5, 30)
             }
         }
         drawGrid(graphics, shown, x, y, cell, r0, rows, c0, cols)
-        if (!withLegend) return y + rows * cell + 1
         var ly = y + rows * cell + 4
         var lx = x
+        if (!withLegend) return drawSoilKey(graphics, shown, x, ly, maxW)
         for (i in shown.legendIds.indices) {
             val entry = LEGEND_ICON + 3 + shown.legendWidths[i]
             if (lx > x && lx + entry > x + maxW) {
@@ -1017,7 +1046,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             graphics.text(font, shown.legendNames[i], lx + LEGEND_ICON + 3, ly + 2, if (shown.legendIds[i] == shown.highlight) TARGET_BORDER else WHITE, false)
             lx += entry + 8
         }
-        ly += LEGEND_H + 2
+        ly += LEGEND_H
+        ly = drawSoilKey(graphics, shown, x, ly, maxW) + 2
         if (!withExtra) return ly
         for ((i, line) in extra.withIndex()) {
             if (i >= 4 || ly + 8 > y + maxH) break
@@ -1025,6 +1055,28 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             ly += 9
         }
         return ly
+    }
+
+    /** Draws the soil key (colour chip, letter, name) at [x],[y]; returns the y below it. */
+    private fun drawSoilKey(graphics: GuiGraphicsExtractor, shown: Picture, x: Int, y: Int, maxW: Int): Int {
+        val soils = soilsOf(shown)
+        if (soils.isEmpty()) return y
+        var ly = y
+        var sx = x
+        for (soil in soils) {
+            val label = prettify(soil)
+            val entry = LEGEND_ICON + 3 + font.width(label)
+            if (sx > x && sx + entry > x + maxW) {
+                sx = x
+                ly += LEGEND_H
+            }
+            graphics.fill(sx, ly + 1, sx + LEGEND_ICON, ly + 1 + LEGEND_ICON, GhSoil.EDGE)
+            graphics.fill(sx + 1, ly + 2, sx + LEGEND_ICON - 1, ly + LEGEND_ICON, GhSoil.color(soil))
+            graphics.text(font, GhSoil.letter(soil), sx + 3, ly + 2, GhSoil.letterColor(soil), false)
+            graphics.text(font, label, sx + LEGEND_ICON + 3, ly + 2, TITLE_COLOR, false)
+            sx += entry + 8
+        }
+        return ly + LEGEND_H
     }
 
     private fun drawGrid(graphics: GuiGraphicsExtractor, shown: Picture, x: Int, y: Int, cell: Int, r0: Int, rows: Int, c0: Int, cols: Int) {
@@ -1051,16 +1103,27 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             val cy = y + (shown.blockRow[b] - r0) * cell
             val size = span * cell
             val isTarget = id == shown.highlight
-            if (isTarget) graphics.fill(cx, cy, cx + size + 1, cy + size + 1, TARGET_BORDER)
-            graphics.fill(cx + 1, cy + 1, cx + size, cy + size, when {
-                isTarget -> TARGET_FILL
-                data.mutation(id) != null -> MUTATION_FILL
-                else -> CROP_FILL
-            })
+            // The block is painted as the soil it grows on; the target keeps a gold frame.
+            graphics.fill(cx, cy, cx + size + 1, cy + size + 1, if (isTarget) TARGET_BORDER else GhSoil.EDGE)
+            val inset = if (isTarget) 2 else 1
+            graphics.fill(cx + inset, cy + inset, cx + size + 1 - inset, cy + size + 1 - inset, GhSoil.color(soilOf(id)))
+            // A light top edge and a dark bottom edge give the soil a little depth.
+            graphics.fill(cx + inset, cy + inset, cx + size + 1 - inset, cy + inset + 1, GhSoil.LIGHT)
+            graphics.fill(cx + inset, cy + size - inset, cx + size + 1 - inset, cy + size + 1 - inset, GhSoil.SHADE)
+            // A gold pip in the top right corner marks a mutation; a soil letter bottom left helps colour-blind players.
+            if (data.mutation(id) != null) graphics.fill(cx + size - 3 - inset, cy + inset + 1, cx + size - inset, cy + inset + 4, GhSoil.MUTATION_PIP)
             // The icon fills the block, with a little margin.
             val iconPx = (size - 4).coerceAtLeast(6)
             val pad = (size - iconPx + 1) / 2
             icon(graphics, id, cx + pad, cy + pad, iconPx)
+            // The soil letter sits on top of the icon, on a small dark chip so it reads on any crop.
+            if (size >= 18) {
+                val letter = GhSoil.letter(soilOf(id))
+                val chipX = cx + inset
+                val chipY = cy + size - inset - 9
+                graphics.fill(chipX, chipY, chipX + font.width(letter) + 2, chipY + 9, GhSoil.EDGE)
+                graphics.text(font, letter, chipX + 1, chipY + 1, -1, false)
+            }
         }
     }
 
@@ -1071,7 +1134,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val cell = gridCell
         if (mouseX < gridX || mouseY < gridY || mouseX >= gridX + gridCols * cell || mouseY >= gridY + gridRows * cell) return
         val id = shown.layout.cells[gridR0 + (mouseY - gridY) / cell][gridC0 + (mouseX - gridX) / cell] ?: return
-        val name = Greenhouse.data.nameOf(id)
+        val soil = soilOf(id)
+        val name = Greenhouse.data.nameOf(id) + if (soil.isEmpty()) "" else " §7on ${prettify(soil)}"
         val w = font.width(name)
         val x = (mouseX + 8).coerceAtMost(left + panelWidth - w - 8)
         val y = mouseY - 14
@@ -1704,7 +1768,11 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         if (mixPictureFor !== result) {
             mixPictureFor = result
             s.picture = result.layout?.let { makePicture(it, null) }
+            val layout = result.layout
+            reuseLine = if (layout == null) "" else GhReuse.of(reuseBase, layout)?.text() ?: ""
+            if (layout != null) reuseBase = layout
         }
+        s.extra = if (reuseLine.isEmpty()) emptyList() else listOf(reuseLine)
         val rows = ArrayList<SideRow>(16)
         if (result.unplaced.isNotEmpty()) {
             rows += SideRow(null, "§cNot placed", heading = true)
@@ -2036,8 +2104,6 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         private const val BAD_TEXT = 0xFFFF5555.toInt()
         private const val UNKNOWN_TEXT = 0xFF909090.toInt()
         private const val TARGET_BORDER = 0xFFFFD040.toInt()
-        private const val TARGET_FILL = 0xFF6B5512.toInt()
-        private const val MUTATION_FILL = 0xFF45305E.toInt()
         private const val CROP_FILL = 0xFF2A5A34.toInt()
         private const val BLOCKED_CELL = 0xFF4A1818.toInt()
         private const val BLOCKED_CROSS = 0xFFD04040.toInt()

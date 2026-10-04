@@ -56,6 +56,29 @@ package dev.nytrix.nyaddons.features.greenhouse
  *     Whether crops must be fully grown to count could not be verified; SkyShards ignores it.
  */
 
+/** How much of a [base] picture a new layout keeps: [reused] squares hold the same crop in both, [added] are new squares to plant. */
+class GhReuse(val reused: Int, val added: Int) {
+    /** The one-line readout for the planner side panel. */
+    fun text() = "§7Reuses §f$reused §7placed ${if (reused == 1) "square" else "squares"}, §f$added §7new"
+
+    companion object {
+        /** Compares [next] with [base] cell by cell; null when there is no base picture or it holds nothing. */
+        fun of(base: GhLayout?, next: GhLayout): GhReuse? {
+            if (base == null || base.size != next.size) return null
+            var reused = 0
+            var added = 0
+            var baseCells = 0
+            for (r in 0 until next.size) for (c in 0 until next.size) {
+                val b = base.cells[r][c]
+                if (b != null) baseCells++
+                val n = next.cells[r][c] ?: continue
+                if (b == n) reused++ else added++
+            }
+            return if (baseCells == 0) null else GhReuse(reused, added)
+        }
+    }
+}
+
 /** Plans layouts on the live [Greenhouse.data]. The core is [PlannerCore]. */
 /** A planned [layout] plus the neighbouring mutations whose own rings the layout does not satisfy (they must come from stock). */
 class GhPlan(val layout: GhLayout, val stocked: List<String>) {
@@ -94,6 +117,8 @@ object GreenhousePlannerImpl : GhPlanner {
 
 /** The rules and the search, on any [GhData]. Not thread safe per call state: each call builds its own search arrays. */
 class PlannerCore(data: GhData) {
+    /** When false the search ignores the placed picture when choosing the target's spot (used to measure what reuse buys). */
+    var reuseEnabled = true
     private val n: Int
     private val ids: Array<String>
     private val index = HashMap<String, Int>()
@@ -461,6 +486,23 @@ class PlannerCore(data: GhData) {
             return true
         }
 
+        /** How many of the target's needed ring cells a block at ([r], [c]) would already find filled with the right thing. */
+        fun reuseAt(r0: Int, c0: Int, s: Int): Int {
+            var sum = 0
+            val rc = reqCrop[target]
+            val rn = reqCount[target]
+            for (k in rc.indices) {
+                var have = 0
+                for (r in maxOf(0, r0 - 1)..minOf(GRID - 1, r0 + s)) for (c in maxOf(0, c0 - 1)..minOf(GRID - 1, c0 + s)) {
+                    if (r in r0 until r0 + s && c in c0 until c0 + s) continue
+                    val o = grid[r * GRID + c]
+                    if (o >= 0 && eId[o] == rc[k]) have++
+                }
+                sum += minOf(have, rn[k])
+            }
+            return sum
+        }
+
         fun run(): Boolean {
             if (base != null) for (b in 0 until base.count) if (put(base.eId[b], base.eR[b], base.eC[b]) < 0) return false
             root = count
@@ -468,15 +510,24 @@ class PlannerCore(data: GhData) {
             val tr: Int
             val tc: Int
             if (mask != null || base != null) {
-                // Only spots where the target fits in the unlocked cells: the one nearest the middle first, then random ones.
+                // Only spots where the target fits in the unlocked cells. With a picture already there, most of the attempts take the
+                // spot whose ring already holds the most of what the target needs (fewest new squares); the rest are the one nearest
+                // the middle, then random ones.
                 var pick = -1
                 var picks = 0
                 var bestDist = Float.MAX_VALUE
+                var bestFit = -1
+                val reuse = reuseEnabled && base != null && base.count > 0
                 for (r in 0..GRID - ts) for (c in 0..GRID - ts) {
                     if (!fits(r, c, ts)) continue
                     picks++
                     val dist = kotlin.math.abs(r + ts / 2f - 4.5f) + kotlin.math.abs(c + ts / 2f - 4.5f)
-                    if (attempt == 0) { if (dist < bestDist) { bestDist = dist; pick = r * GRID + c } }
+                    if (reuse) {
+                        val have = reuseAt(r, c, ts)
+                        // ties: random after the first attempt, else nearest the middle
+                        val better = have > bestFit || (have == bestFit && (if (attempt == 0) dist < bestDist else rnd.next(2) == 0))
+                        if (better) { bestFit = have; bestDist = dist; pick = r * GRID + c }
+                    } else if (attempt == 0) { if (dist < bestDist) { bestDist = dist; pick = r * GRID + c } }
                     else if (rnd.next(picks) == 0) pick = r * GRID + c // reservoir sample
                 }
                 if (pick < 0) return false
