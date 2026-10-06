@@ -2,6 +2,9 @@ package dev.nytrix.nyaddons.test
 
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.core.EventList
+import dev.nytrix.nyaddons.features.Features
+import com.mojang.brigadier.CommandDispatcher
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback
 import dev.nytrix.nyaddons.core.NyEvents
 import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.TrackedTree
@@ -48,8 +51,64 @@ import kotlin.math.abs
 @Suppress("UnstableApiUsage")
 class NyAddOnsGameTest : FabricClientGameTest {
 
+    private companion object {
+        const val RUN_HIDDEN_FEATURE_TESTS = false
+    }
+
     override fun runTest(context: ClientGameTestContext) {
         fusionCalculatorMatchesSkyShards()
+        hiddenFeaturesStayHidden(context)
+        hiddenConfigValuesSurvive(context)
+        // The Foraging/Hunting features are hidden (Features.hidden), so their world test cannot run.
+        // Set this to true when one is moved back into Features.all.
+        if (RUN_HIDDEN_FEATURE_TESTS) hiddenFeatureWorld(context)
+    }
+
+    /** With every Foraging/Hunting feature hidden, the settings screen shows only GUI and Garden and /hunt is gone. */
+    private fun hiddenFeaturesStayHidden(context: ClientGameTestContext) {
+        // The client commands are rebuilt on every world join, so catch the dispatcher the join hands out.
+        var commands: CommandDispatcher<*>? = null
+        ClientCommandRegistrationCallback.EVENT.register { dispatcher, _ -> commands = dispatcher }
+        context.worldBuilder().create().use {
+            context.onClient {
+                check(Features.hidden.none { f -> f in Features.all }) { "a hidden feature is also in Features.all" }
+                val root = commands?.root ?: error("no client command dispatcher was handed out on join")
+                check(root.getChild("hunt") == null) { "/hunt is still registered" }
+                check(root.getChild("ny") != null) { "/ny is missing" }
+                check(root.getChild("gh") != null) { "/gh is missing" }
+                NyAddOns.openConfig()
+            }
+            context.waitFor { it.screen != null }
+            context.waitTicks(10)
+            context.takeScreenshot("hidden-config-categories")
+            context.setScreen { null }
+        }
+    }
+
+    /** Values set on a hidden feature (as a 0.8.4 config would hold) are written back to config.json and read in again. */
+    private fun hiddenConfigValuesSurvive(context: ClientGameTestContext) {
+        context.onClient {
+            val config = NyAddOns.config
+            val oldTrackKey = config.hunting.shardTracker.trackKey
+            val oldAlert = config.foraging.honeycombTrees.alertTitle
+            config.hunting.shardTracker.trackKey = 77
+            config.hunting.fusionTracker.hunterFortune = 12.5f
+            config.foraging.honeycombTrees.alertTitle = !oldAlert
+            NyAddOns.saveConfig()
+            val file = net.fabricmc.loader.api.FabricLoader.getInstance().configDir.resolve("nyaddons/config.json")
+            val loaded = com.google.gson.GsonBuilder().excludeFieldsWithoutExposeAnnotation().create()
+                .fromJson(java.nio.file.Files.readString(file), dev.nytrix.nyaddons.config.NyConfig::class.java)
+            check(loaded.hunting.shardTracker.trackKey == 77) { "hunting trackKey was not kept: ${loaded.hunting.shardTracker.trackKey}" }
+            check(loaded.hunting.fusionTracker.hunterFortune == 12.5f) { "hunterFortune was not kept" }
+            check(loaded.foraging.honeycombTrees.alertTitle == !oldAlert) { "foraging alertTitle was not kept" }
+            config.hunting.shardTracker.trackKey = oldTrackKey
+            config.hunting.fusionTracker.hunterFortune = 0f
+            config.foraging.honeycombTrees.alertTitle = oldAlert
+            NyAddOns.saveConfig()
+        }
+    }
+
+    private fun hiddenFeatureWorld(context: ClientGameTestContext) {
         System.setProperty("nyaddons.devArea", "Moonglade Marsh")
         context.worldBuilder().create().use { world ->
             val server = world.server

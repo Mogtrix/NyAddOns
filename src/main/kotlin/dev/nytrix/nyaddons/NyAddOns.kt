@@ -153,8 +153,6 @@ object NyAddOns : ClientModInitializer {
         ChatUtils.chat("§6/ny §7- §eopen the config")
         ChatUtils.chat("§6/ny gui §7- §emove and resize overlays")
         ChatUtils.chat("§6/ny reset §7- §eclear all timers")
-        ChatUtils.chat("§6/hunt §7- §echoose shards to track")
-        ChatUtils.chat("§6/hunt <shard> §7- §etrack or untrack a shard")
-        ChatUtils.chat("§6/hunt clear §7- §estop tracking all shards")
+        ChatUtils.chat("§6/gh §7- §eopen the Greenhouse window")
     }
 }

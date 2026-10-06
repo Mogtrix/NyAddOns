@@ -57,9 +57,9 @@ interface GhStock {
 /** A 10x10 layout: [cells][row][column] holds a crop or mutation id, or null for an empty cell. */
 class GhLayout(val size: Int, val cells: Array<Array<String?>>, val target: String)
 
-/** Works out where to plant things so a mutation can spawn. */
+/** Works out where to plant things so a mutation can spawn. Blocks (it calls SkyShards), so use it off the render thread. */
 interface GhPlanner {
-    /** A layout in which [target] spawns by the Greenhouse rules, or null if none can be found. */
+    /** A layout in which [target] spawns by the Greenhouse rules, or null if none fits. Throws [SkyShardsException] when the solver cannot be reached. */
     fun plan(target: GhMutation): GhLayout?
 
     /** Like [plan] but only uses the cells set in [unlocked] (row-major, 100 entries); null allows every cell. */

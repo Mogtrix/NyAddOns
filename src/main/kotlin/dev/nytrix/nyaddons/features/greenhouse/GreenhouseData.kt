@@ -105,7 +105,7 @@ object GreenhouseDataImpl : GhData {
     private fun tick() {
         if (snapshot != null && clock() - lastAccess > idleMillis) {
             snapshot = null
-            GreenhousePlannerImpl.release()
+            SkyShards.clearCache()
         }
     }
 

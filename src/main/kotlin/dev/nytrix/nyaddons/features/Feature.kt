@@ -30,12 +30,20 @@ object Features {
 
     /** Adding a feature: write the object, give it config options, and add it to this list. */
     val all: List<Feature> = listOf(
+        GreenhouseStockFeature,
+        GreenhouseFeature,
+    )
+
+    /**
+     * Kept in the code but switched off: never initialised, so they do not tick, render, or register
+     * overlays, commands or keybinds. To bring one back, move it into [all] and restore its
+     * @Category in [dev.nytrix.nyaddons.config.NyConfig].
+     */
+    val hidden: List<Feature> = listOf(
         HoneycombTreeTimer,
         HoneyhiveTimer,
         ShardTracker,
         FusionTracker,
         FusionTree,
-        GreenhouseStockFeature,
-        GreenhouseFeature,
     )
 }

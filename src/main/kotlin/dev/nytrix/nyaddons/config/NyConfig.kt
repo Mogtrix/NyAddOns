@@ -28,8 +28,9 @@ class NyConfig : Config() {
     @JvmField
     var gui = GuiConfig()
 
+    // Hidden features (see Features.hidden) have no @Category, so they are off the settings screen.
+    // The fields stay so their code compiles and saved values survive; add @Category back to show one.
     @Expose
-    @Category(name = "Foraging", desc = "Features for Moonglade Marsh and Torrhus Canyon.")
     @JvmField
     var foraging = ForagingConfig()
 
@@ -39,7 +40,6 @@ class NyConfig : Config() {
     var garden = GardenConfig()
 
     @Expose
-    @Category(name = "Hunting", desc = "Features for shards and attributes.")
     @JvmField
     var hunting = HuntingConfig()
 }

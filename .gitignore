@@ -39,3 +39,6 @@ replay_*.log
 *.hprof
 *.jfr
 branding/
+
+# third-party SkyShards solver (AGPL-3.0), local reference only
+skyshards-solver/

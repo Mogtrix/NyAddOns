@@ -2,7 +2,8 @@ package dev.nytrix.nyaddons.features.greenhouse
 
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.config.GreenhouseView
-import dev.nytrix.nyaddons.core.PinnedPlot
+import dev.nytrix.nyaddons.config.PlannerStyle
+import dev.nytrix.nyaddons.config.RoseTreeStyle
 import dev.nytrix.nyaddons.core.Safe
 import dev.nytrix.nyaddons.core.Storage
 import dev.nytrix.nyaddons.core.TimeUtils
@@ -39,7 +40,13 @@ private const val CAP_UNKNOWN = -2
 private class SideRow(val icon: String?, val text: String, val heading: Boolean = false, val counts: String = "", val countColor: Int = 0, val countWidth: Int = 0)
 
 /** One line of the Rose Dragon tree, prepared for drawing. */
-private class TreeLine(val row: TreeRow, val label: String, val counts: String, val countWidth: Int, val covered: Boolean, val fitText: String, val fitWidth: Int)
+private class TreeLine(val row: TreeRow, val label: String, val counts: String, val countWidth: Int, val covered: Boolean, val fitText: String, val fitWidth: Int, val pill: Pill? = null)
+
+/** The pill-style look of a [TreeLine]: where the pill sits, its texts and which connector columns run past it. */
+private class Pill(
+    val x0: Int, val x1: Int, val badge: String, val badgeWidth: Int, val name: String, val crops: String, val cropsWidth: Int, val summary: String,
+    val outline: Int, val guides: BooleanArray,
+)
 
 /** A layout plus what is needed to draw it: the blocks (a 2x2 or 3x3 mutation is one block) and the legend entries. */
 private class Picture(
@@ -139,11 +146,6 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private var doneButton = Rect(0, 0, 0, 0)
     private var blockButton = Rect(0, 0, 0, 0)
     private var unblockButton = Rect(0, 0, 0, 0)
-    private var pinPlanner = Rect(0, 0, 0, 0)
-    private val pinRose = Rect(0, 0, 0, 0)
-    private var pinLabel = "Pin to screen"
-    private var plannerPinned = false
-    private var rosePinned = false
     private var plotsHint = emptyList<String>()
     private var plotsControlsX = 0
 
@@ -173,7 +175,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private var footer = ""
     private var loading = false
     private var tree = emptyList<TreeLine>()
-    private val expanded = HashSet<String>()
+    private val expanded = hashSetOf(GreenhouseTree.ROOT_PATH)
     private var all = emptyList<GhMutation>()
     private var allLabels = emptyArray<String>()
     private var selected = 0
@@ -187,15 +189,18 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private var panelGeneration = 0
     @Volatile private var panelResult: GhLayout? = null
     @Volatile private var panelDone = false
+    @Volatile private var panelError: String? = null
     private val rose = Side()
     private var panelRounds = 0
 
     // The Max solver of the Planner view (the main button or one row's "max"): one run at a time, answered on a background thread.
     @Volatile private var maxRunning = false
+    private var keyBottomDrawn = 0
     @Volatile private var maxAnswer: GhMaxResult? = null
     @Volatile private var alongAnswer: GhPlaceResult? = null
     @Volatile private var maxDone = false
     @Volatile private var maxPlan: GhPlaceResult? = null
+    @Volatile private var maxFallbackAt = 0L
     private var maxGeneration = 0
     private var maxRow: String? = null
 
@@ -207,6 +212,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private var mixStale = true
     private var mixDirtyAt = 0
     private var mixShown: GhPlaceResult? = null
+    // When [mixShown] was worked out (epoch millis): the "Saved plan from <time>" label when SkyShards then fails.
+    private var mixShownAt = 0L
+    private var lastEdited: String? = null
+    private var retryButton = Rect(0, 0, 0, 0)
     private var mixPictureFor: GhPlaceResult? = null
     private var reuseBase: GhLayout? = null
     private var reuseLine = ""
@@ -214,7 +223,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     // Row caps: the most a row can take alongside the OTHER rows' amounts (the row max computation), found in the background and
     // cached per (other rows' amounts, squares, One of each). Only a heuristic: "no more fit" means our greedy search found none.
     private class CapRequest(val key: Long, val id: String, val amounts: Map<String, Int>, val mask: BooleanArray)
-    private class CapAnswer(val key: Long, val id: String, val cap: Int)
+    private class CapAnswer(val key: Long, val id: String, val cap: Int, val failed: Boolean = false)
     private val capCache = object : LinkedHashMap<Long, Int>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Int>?) = size > CAP_CACHE_SIZE
     }
@@ -225,6 +234,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private val capBase = HashMap<String, Int>() // amount before an increase that the cap has not checked yet
     private var capNote = ""
     private var maxKey = 0L
+    // SkyShards: what the running planner solve says it is doing, and why the last one could not be answered (null: no error).
+    @Volatile private var skyProgress = ""
+    @Volatile private var skyError: String? = null
     private val plannerSide = Side()
     private var sideScroll = 0
     private var sideContentH = 0
@@ -233,6 +245,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     @Volatile private var planning = false
     @Volatile private var planResult: GhLayout? = null
     @Volatile private var planDone = false
+    @Volatile private var planError: String? = null
     private var planFor: String? = null
     private var layout: GhLayout? = null
     private var picture: Picture? = null
@@ -264,7 +277,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         else -> 26
     }
     private val footerY get() = top + panelHeight - 13
-    private val listBottom get() = footerY - 3 - disclaimer.size * 9 - 4
+    private val listBottom get() = footerY - 3 - disclaimer.size * 9 - 4 - keyH
+    /** Height of the one-line soil key under the compact Planner list. */
+    private val keyH get() = if (view == GreenhouseView.PLANNER && config.plannerStyle == PlannerStyle.COMPACT) KEY_H else 0
     private val listLeft get() = left + 8
     private val sideWidth get() = (panelWidth * 0.42).toInt().coerceIn(150, 330)
     private val sideLeft get() = left + panelWidth - 8 - sideWidth
@@ -334,11 +349,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         blockButton = Rect(cx, y0 + 44, font.width("Block mode") + 14, BUTTON_H)
         doneButton = Rect(blockButton.x + blockButton.w + 4, y0 + 44, font.width("Done") + 14, BUTTON_H)
         plotsHint = wrap("§7Fill unlocks the squares nearest the middle first. Block mode: click an unlocked square to keep it empty.", left + panelWidth - 8 - cx)
-        // Planner: the pin button sits at the right end of the side panel's title row.
         capMarkW = font.width("at max")
-        pinLabel = if (font.width("Planned layout") + 8 + font.width("Pin to screen") + 10 <= sideWidth) "Pin to screen" else "Pin"
-        val pinW = font.width(pinLabel) + 10
-        pinPlanner = Rect(sideLeft + sideWidth - pinW, linesY + 17, pinW, BUTTON_H - 2)
+        // Planner: Retry sits at the right end of the side panel's title row while SkyShards is down.
+        val retryW = font.width("Retry") + 10
+        retryButton = Rect(sideLeft + sideWidth - retryW, linesY + 17, retryW, BUTTON_H - 2)
     }
 
     override fun tick() = site.screen(this) { update() }
@@ -373,13 +387,24 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         if (mixDone) {
             mixDone = false
             mixWorking = false
-            mixShown = mixResult
+            // SkyShards failed (an error is showing): keep the last good plan, greyed, instead of blanking it.
+            if (mixResult != null || skyError == null) {
+                mixShown = mixResult
+                mixShownAt = System.currentTimeMillis()
+            }
             mixResult = null
             buildPlannerSide()
         }
         if (mixStale && view == GreenhouseView.PLANNER && !maxRunning && ticks - mixDirtyAt >= MIX_DEBOUNCE_TICKS) {
             checkCap()
             startMix()
+        }
+        // While SkyShards works (Max or the shared plan) the side panel shows how far it is.
+        if (maxRunning || mixWorking) {
+            plannerSide.busy = true
+            plannerSide.busyText = skyProgress.ifEmpty { "Working..." }
+        } else if (plannerSide.busy) {
+            plannerSide.busy = false
         }
     }
 
@@ -407,6 +432,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         maxAnswer = null
         gridPicture = null
         expanded.clear()
+        expanded.add(GreenhouseTree.ROOT_PATH)
     }
 
     // Models
@@ -460,15 +486,22 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val percent = GreenhouseTree.percent(data, stock)
         roseLine = "Rose Dragon ~$percent%"
         roseFraction = percent / 100f
-        hint = arrayOf(
+        val pills = config.roseTreeStyle == RoseTreeStyle.PILLS
+        hint = (if (pills) arrayOf(
+            "§7Click a pill for its plot layout, - collapses it and + expands it. Right side: held/needed. The percentage is a rough estimate.",
+            "§7Click a pill for its layout, - / + collapse. Right: held/needed. Percentage is rough.",
+            "§7Click a pill for its layout. - collapses, + expands.",
+        ) else arrayOf(
             "§7Arrow expands a row, its name shows the plot layout. Right side: held/needed. The percentage is a rough estimate.",
             "§7Arrow expands a row, name shows the layout. Right: held/needed. Percentage is rough.",
             "§7Arrow expands, name shows the layout. Right: held/needed.",
-        ).firstOrNull { font.width(it) <= panelWidth - 16 } ?: ellipsize("§7Arrow expands, name shows the layout.", panelWidth - 16)
+        )).firstOrNull { font.width(it) <= panelWidth - 16 } ?: ellipsize("§7Arrow expands, name shows the layout.", panelWidth - 16)
 
-        val rows = GreenhouseTree.rows(data, stock, expanded)
+        val rows = GreenhouseTree.rows(data, stock, expanded, pills)
         val treeRight = right - 4
-        tree = rows.map { row ->
+        if (pills) {
+            tree = pillLines(rows, treeRight)
+        } else tree = rows.map { row ->
             val counts = "${formatCount(row.have)}/${formatCount(row.need)}"
             val countWidth = font.width(counts)
             val label = if (row.depth == 0) row.name else "x${row.need} ${row.name}"
@@ -482,18 +515,19 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val boxX = plannerPlusX - 1 - BOX_W
         plannerBoxX = boxX
         plannerMinusX = boxX - 1 - STEP_W
-        plannerMaxW = font.width("max") + 6
+        // The compact style prints the row's cap after "max" (so it does not read like the top Max button), which needs more room.
+        plannerMaxW = font.width(if (config.plannerStyle == PlannerStyle.COMPACT) "max 99" else "max") + 6
         plannerMaxX = plannerMinusX - 3 - plannerMaxW
         val plan = profile.planAmounts
         val unplaced = mixShown?.unplaced
         val capSeed = capBaseHash()
+        val shownPlaced = mixShown?.placed
         plannerRows = data.mutations.filter { it.id !in GreenhouseGoals.skippedMutations }.sortedBy { it.name }.map { m ->
             val label = "${rarityCode(m.rarity)}${m.name}"
             val amount = plan[m.id] ?: 0
-            PlannerRow(m.id, label, font.width(label), m.id in profile.analysed, amount, amount.toString(), amount > 0 && unplaced != null && m.id in unplaced, capCache[capKey(m.id, capSeed)] ?: CAP_UNKNOWN)
+            PlannerRow(m.id, label, font.width(label), m.id in profile.analysed, amount, amount.toString(), amount > 0 && unplaced != null && m.id in unplaced, provenCap(capCache[capKey(m.id, capSeed)] ?: CAP_UNKNOWN, amount, shownPlaced?.get(m.id) ?: 0))
         }
         buildPlannerSide()
-        refreshPinFlags()
 
         all = data.mutations.sortedBy { it.name }
         allLabels = Array(all.size) { "${rarityCode(all[it].rarity)}${all[it].name}" }
@@ -503,6 +537,59 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         val updated = stock.sacksUpdatedAt
         footer = if (updated <= 0) "§7Sacks: open your sacks on the Garden" else "§7Sacks last updated: ${TimeUtils.format(System.currentTimeMillis() - updated).let { if (it == "Soon") "just now" else "$it ago" }}"
         for (i in scroll.indices) scroll[i] = scroll[i].coerceIn(0, maxScroll(i))
+    }
+
+    /** Lays out the pill tree: each pill's width and texts, and which connector columns run past it. */
+    private fun pillLines(rows: List<TreeRow>, treeRight: Int): List<TreeLine> {
+        // Going backwards, `later[c]` says the next row at depth c or shallower is at exactly depth c, so column c's line carries on.
+        val later = BooleanArray(MAX_PILL_DEPTH + 2)
+        val guides = arrayOfNulls<BooleanArray>(rows.size)
+        for (i in rows.indices.reversed()) {
+            val d = rows[i].depth.coerceAtMost(MAX_PILL_DEPTH)
+            guides[i] = BooleanArray(d + 1) { it in 1..d && later[it] }
+            later[d] = true
+            for (c in d + 1 until later.size) later[c] = false
+        }
+        val ph = rowH - 1
+        return rows.mapIndexed { i, row ->
+            val x0 = listLeft + 4 + row.depth.coerceAtMost(MAX_PILL_DEPTH) * PILL_INDENT
+            val badge = "§l${row.need}x"
+            val badgeW = font.width(badge) + 6
+            val counts = "${formatCount(row.have)}/${formatCount(row.need)}"
+            val countW = font.width(counts)
+            val isRoot = row.path == GreenhouseTree.ROOT_PATH
+            val nameColor = if (isRoot) "§c" else if (row.id == null) "§7" else if (row.rarity.isEmpty()) "§f" else rarityCode(row.rarity)
+            // Greyed (under an intermediate you already hold): no colour codes, so the draw colour dims the whole pill.
+            val name = if (row.greyed) row.name else (if (row.farmNext) "§6★ " else "") + nameColor + row.name
+            val button = if (row.expandable) 6 + font.width("+") else 0
+            val fixed = 3 + badgeW + 3 + (ph - 2) + 3 + font.width(name) + 6 + countW + button + 4
+            var room = treeRight - x0 - fixed
+            // Root pill: raw crops held/needed for the whole tree, kept whole while the ingredient list shrinks.
+            // When even that does not fit the tree column (side panel open), it loses the "Crops" word, then goes, so the capsule end stays inside.
+            val cropCount = "${if (row.cropHave >= row.cropNeed) "§a" else "§c"}${formatCount(row.cropHave)}/${formatCount(row.cropNeed)}"
+            val crops = if (!isRoot || row.cropNeed <= 0) "" else listOf("§6Crops $cropCount", cropCount).firstOrNull { font.width(it) + 6 <= room } ?: ""
+            if (crops.isNotEmpty()) room -= font.width(crops) + 6
+            val fitText = if (row.id == null) "" else fitLabel(fit.check(row.id), room - 6)
+            if (fitText.isNotEmpty()) room -= font.width(fitText) + 6
+            // Too tight for "3x Wheat": drop the "x" ("3 Wheat") before cutting the text short.
+            val summaryStyle = if (row.greyed) "§o" else "§7§o"
+            val summary = if (row.summary.isEmpty() || room < 30) "" else "$summaryStyle${row.summary}".let { full ->
+                if (font.width(full) <= room - 6) full else ellipsize("$summaryStyle${row.summary.replace(COUNT_X, "$1 ")}", room - 6)
+            }
+            val width = fixed + (if (crops.isEmpty()) 0 else 6 + font.width(crops)) + (if (summary.isEmpty()) 0 else 6 + font.width(summary)) + (if (fitText.isEmpty()) 0 else 6 + font.width(fitText))
+            val outline = if (row.greyed) PILL_CROP_OUTLINE else if (isRoot) PILL_ROOT_OUTLINE else if (row.farmNext) PILL_FARM_NEXT_OUTLINE else if (row.id == null) PILL_CROP_OUTLINE else rarityColor(row.rarity)
+            TreeLine(row, "x${row.need} ${row.name}", counts, countW, row.have >= row.need, fitText, font.width(fitText), Pill(x0, x0 + width, badge, badgeW, name, crops, font.width(crops), summary, outline, guides[i]!!))
+        }
+    }
+
+    private fun rarityColor(rarity: String): Int = when (rarity.lowercase()) {
+        "uncommon" -> 0xFF55FF55.toInt()
+        "rare" -> 0xFF5555FF.toInt()
+        "epic" -> 0xFFAA00AA.toInt()
+        "legendary" -> 0xFFFFAA00.toInt()
+        "mythic" -> 0xFFFF55FF.toInt()
+        "divine" -> 0xFF55FFFF.toInt()
+        else -> 0xFFE0E0E0.toInt()
     }
 
     /** The red note for a mutation that does not fit the unlocked squares, in the longest wording that fits [avail] pixels. */
@@ -624,6 +711,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             GreenhouseView.ALL_MUTATIONS -> drawAll(graphics, mouseX, mouseY)
             GreenhouseView.PLANNER -> drawPlanner(graphics, mouseX, mouseY)
         }
+        if (!plotsOpen && view == GreenhouseView.PLANNER && !maxRunning && maxButton.contains(mouseX, mouseY)) drawTextTip(graphics, GhMax.MAX_TIP, mouseX, mouseY)
         for ((i, line) in disclaimer.withIndex()) graphics.text(font, line, left + 8, footerY - 3 - (disclaimer.size - i) * 9 + 1, WHITE, false)
         graphics.text(font, footer, left + 8, footerY, WHITE, false)
         if (loading) {
@@ -650,7 +738,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         graphics.fill(x + 1, y + 1, x + w - 1, y + barH - 1, SLOT_BACKGROUND)
         val filled = ((w - 2) * fraction.coerceIn(0f, 1f)).toInt()
         if (filled > 0) graphics.fill(x + 1, y + 1, x + 1 + filled, y + barH - 1, color)
-        graphics.text(font, text, x + 5, y + (barH - 8) / 2 + 1, WHITE, true)
+        // A thin fill must not run through the first letters: start the text just past it.
+        val textX = if (filled in 1 until font.width(text) + 10) x + 1 + filled + 4 else x + 5
+        graphics.text(font, text, textX, y + (barH - 8) / 2 + 1, WHITE, true)
     }
 
     private fun drawButton(graphics: GuiGraphicsExtractor, r: Rect, label: String, mouseX: Int, mouseY: Int, active: Boolean = false) {
@@ -748,7 +838,129 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         if (!loading && unique.isEmpty()) graphics.text(font, "§7No mutation data.", listLeft, listTop + 2, WHITE, false)
     }
 
+    /** A flat text button for the compact Planner: no box, brighter under the mouse. */
+    private fun drawFlatButton(graphics: GuiGraphicsExtractor, r: Rect, label: String, mouseX: Int, mouseY: Int, color: Int) {
+        val over = r.contains(mouseX, mouseY)
+        graphics.text(font, label, r.x + (r.w - font.width(label)) / 2, r.y + (r.h - 8) / 2 + 1, if (over) WHITE else color, false)
+        if (over) graphics.fill(r.x + 3, r.y + r.h - 2, r.x + r.w - 3, r.y + r.h - 1, color)
+    }
+
+    /** The Planner list in the compact style: flat rows, a small coloured soil tag after each name, a plain amount and a tooltip on hover. */
+    private fun drawPlannerCompact(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {
+        val busy = maxRunning
+        drawFlatButton(graphics, maxButton, if (busy) "Working..." else "Max", mouseX, mouseY, if (busy) DIMMED_TEXT else ACCENT)
+        val one = oneRect
+        drawCheckbox(graphics, one.x, one.y + (one.h - 9) / 2, saved.planOneOfEach)
+        graphics.text(font, "One of each", one.x + 13, one.y + (one.h - 8) / 2 + 1, if (one.contains(mouseX, mouseY)) WHITE else TITLE_COLOR, false)
+        drawFlatButton(graphics, clearButton, "Clear", mouseX, mouseY, TITLE_COLOR)
+        if (plannerHint.isNotEmpty()) graphics.text(font, plannerHint, clearButton.x + clearButton.w + 10, linesY + 4, DIMMED_TEXT, false)
+        val right = listRight - 8
+        val first = scroll[GreenhouseView.PLANNER.ordinal]
+        val labelX = listLeft + 4 + iconSize + 4
+        var tip: PlannerRow? = null
+        for (i in 0 until rowsVisible) {
+            val row = plannerRows.getOrNull(first + i) ?: break
+            val y = listTop + i * rowH
+            val hover = mouseX in listLeft until right && mouseY in y until y + rowH
+            if (hover) {
+                graphics.fill(listLeft, y, right, y + rowH - 1, PANEL_LIGHT)
+                if (mouseX < plannerMaxX - 2) tip = row
+            }
+            if (row.amount > 0) graphics.fill(listLeft, y, listLeft + 1, y + rowH - 1, ACCENT)
+            icon(graphics, row.id, listLeft + 4, y + (rowH - 1 - iconSize) / 2, iconSize)
+            val ty = y + (rowH - 8) / 2
+            graphics.text(font, row.label, labelX, ty, WHITE, false)
+            var nx = labelX + row.labelWidth + 5
+            val soil = soilOf(row.id)
+            if (soil.isNotEmpty() && nx + TAG_W <= plannerMaxX - 2) {
+                val tagY = y + (rowH - 1 - TAG_H) / 2
+                graphics.fill(nx, tagY, nx + TAG_W, tagY + TAG_H, GhSoil.EDGE)
+                graphics.fill(nx + 1, tagY + 1, nx + TAG_W - 1, tagY + TAG_H - 1, GhSoil.color(soil))
+                val letter = GhSoil.letter(soil)
+                graphics.text(font, letter, nx + (TAG_W - font.width(letter)) / 2, ty, GhSoil.letterColor(soil), false)
+                nx += TAG_W + 4
+            }
+            val capped = row.atCap && row.amount > 0
+            if (row.analysed) {
+                if (!capped && nx + FOUND_W <= plannerMaxX - 4) {
+                    graphics.text(font, "found", nx, ty, GOOD, false)
+                } else if (nx + 5 <= plannerMaxX - 2) {
+                    graphics.fill(nx, y + (rowH - 5) / 2, nx + 5, y + (rowH - 5) / 2 + 4, GOOD)
+                    nx += 9
+                }
+            }
+            if (capped) {
+                if (nx + capMarkW <= plannerMaxX - 3) graphics.text(font, "at max", nx, ty, CAP_COLOR, false)
+                else if (nx + 5 <= plannerMaxX - 2) graphics.fill(nx, y + (rowH - 5) / 2, nx + 5, y + (rowH - 5) / 2 + 4, CAP_COLOR)
+            }
+            // Same hit areas as the classic style, drawn as plain text.
+            val by = y + (rowH - 1 - BOX_H) / 2
+            val textY = by + (BOX_H - 8) / 2 + 1
+            val overMax = !busy && mouseX in plannerMaxX until plannerMaxX + plannerMaxW && mouseY in by until by + BOX_H
+            val maxLabel = if (row.cap >= 0) "max ${row.cap}" else "max"
+            graphics.text(font, maxLabel, plannerMaxX + plannerMaxW - 3 - font.width(maxLabel), textY, if (busy) DIMMED_TEXT else if (overMax) WHITE else CAP_COLOR, false)
+            val focused = focus == FOCUS_ROW && focusId == row.id
+            fun glyph(x: Int, text: String, greyed: Boolean) {
+                val over = !greyed && mouseX in x until x + STEP_W && mouseY in by until by + BOX_H
+                graphics.text(font, text, x + (STEP_W - font.width(text)) / 2, textY, if (greyed) UNKNOWN else if (over) WHITE else TITLE_COLOR, false)
+            }
+            glyph(plannerMinusX, "-", row.amount == 0)
+            val shown = if (focused) focusText.let { if (ticks / 10 % 2 == 0) "$it|" else it } else row.amountText
+            val color = if (row.problem) BAD_TEXT else if (row.amount == 0 && !focused) DIMMED_TEXT else WHITE
+            graphics.text(font, shown, plannerBoxX + BOX_W - 3 - font.width(shown), textY, color, false)
+            if (focused) graphics.fill(plannerBoxX + 2, by + BOX_H, plannerBoxX + BOX_W - 1, by + BOX_H + 1, ACCENT)
+            glyph(plannerPlusX, "+", row.atCap)
+        }
+        drawScrollbar(graphics, GreenhouseView.PLANNER.ordinal, listRight - 4)
+        if (!loading && plannerRows.isEmpty()) graphics.text(font, "§7No mutation data.", listLeft, listTop + 2, WHITE, false)
+        drawPlannerSide(graphics, mouseX, mouseY)
+        keyBottomDrawn = drawSoilChips(graphics, plannerRows.map { soilOf(it.id) }.filter { it.isNotEmpty() }.distinct(), listLeft + 4, listBottom + 1, right - listLeft - 4)
+        tip?.let { drawRowTip(graphics, it, mouseX, mouseY) }
+    }
+
+    /** A small tooltip box with [text] wrapped to fit, below the mouse. */
+    private fun drawTextTip(graphics: GuiGraphicsExtractor, text: String, mouseX: Int, mouseY: Int) {
+        val lines = wrap("§7$text", 170)
+        val w = lines.maxOf { font.width(it) }
+        val h = lines.size * 10
+        val x = (mouseX + 6).coerceAtMost(left + panelWidth - w - 10).coerceAtLeast(left + 2)
+        val y = (mouseY + 16).coerceAtMost(top + panelHeight - h - 4)
+        graphics.fill(x - 4, y - 3, x + w + 4, y + h + 1, ACCENT)
+        graphics.fill(x - 3, y - 2, x + w + 3, y + h, SLOT_BACKGROUND)
+        for ((i, line) in lines.withIndex()) graphics.text(font, line, x, y + i * 10, WHITE, false)
+    }
+
+    /** The tooltip for a compact Planner row: facts, soil and what must grow next to it. */
+    private fun drawRowTip(graphics: GuiGraphicsExtractor, row: PlannerRow, mouseX: Int, mouseY: Int) {
+        val data = Greenhouse.data
+        val m = data.mutation(row.id) ?: return
+        val lines = ArrayList<String>()
+        lines.add(row.label)
+        lines.add("§7Soil §f${prettify(m.soil)}§7, size §f${m.size}x${m.size}")
+        for (r in m.requirements) {
+            val name = data.nameOf(r.crop)
+            val have = Greenhouse.stock.count(name)
+            // What the player holds, red when short; "?" until a sack menu has been read.
+            val held = if (have == null) "§8have ?" else if (have < r.count) "§chave ${formatCount(have)}" else "§ahave ${formatCount(have)}"
+            lines.add("§7${r.count}x §f$name §8- $held")
+        }
+        if (row.atCap && row.amount > 0) lines.add("§6No more fit alongside the other rows")
+        else if (row.cap >= 0) lines.add("§7Up to §f${row.cap}§7 fit")
+        if (row.analysed) lines.add("§aAlready analysed")
+        val w = lines.maxOf { font.width(it) }
+        val h = lines.size * 10
+        val x = (mouseX + 10).coerceAtMost(left + panelWidth - w - 10).coerceAtLeast(left + 2)
+        // Above the row when that stays inside the list (so the Max / One of each / Clear controls stay visible), else below it.
+        val rowTop = mouseY - (mouseY - listTop) % rowH
+        val above = rowTop - h - 6
+        val y = if (above >= listTop) above else (rowTop + rowH + 5).coerceAtMost(top + panelHeight - h - 4)
+        graphics.fill(x - 4, y - 3, x + w + 4, y + h + 1, ACCENT)
+        graphics.fill(x - 3, y - 2, x + w + 3, y + h, SLOT_BACKGROUND)
+        for ((i, line) in lines.withIndex()) graphics.text(font, line, x, y + i * 10, WHITE, false)
+    }
+
     private fun drawPlanner(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {
+        if (config.plannerStyle == PlannerStyle.COMPACT) return drawPlannerCompact(graphics, mouseX, mouseY)
         // Controls row: the main Max button, the "One of each" switch, Clear and a hint.
         drawMaxButton(graphics, mouseX, mouseY)
         val one = oneRect
@@ -808,9 +1020,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         graphics.fill(x - 4, listTop - 2, x - 3, listBottom, SLOT_BORDER)
         graphics.text(font, s.title, x, listTop + 3, WHITE, false)
         val top = listTop + 16
-        if (s.picture != null && !s.busy) drawPinButton(graphics, pinPlanner, plannerPinned, mouseX, mouseY)
+        if (skyError != null && !s.busy) drawButton(graphics, retryButton, "Retry", mouseX, mouseY)
         if (s.busy) {
-            graphics.text(font, "§7${s.busyText}", x, top, WHITE, false)
+            // Progress such as "SkyShards: queued (position 12)..." wraps instead of running out of the panel.
+            for ((i, line) in wrap("§7${s.busyText}", w - 6).withIndex()) graphics.text(font, line, x, top + i * 9, WHITE, false)
             return
         }
         val textW = w - 6
@@ -821,7 +1034,14 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             y += 9
         }
         val shown = s.picture
-        if (shown != null) y = drawPicture(graphics, shown, x, y + 3, textW, ((listBottom - top) / 2).coerceAtLeast(100), emptyList()) + 4
+        if (shown != null) {
+            val pictureTop = y + 3
+            // Never ask for less than the smallest grid (6px cells) plus the soil key, so the legend is not left half outside the panel.
+            val minH = 6 * shown.layout.size + soilKeyHeight(shown, textW) + 4
+            y = drawPicture(graphics, shown, x, pictureTop, textW, (listBottom - pictureTop - 2).coerceAtLeast(minH), emptyList()) + 4
+            // A saved plan (SkyShards is down) is dimmed.
+            if (skyError != null) graphics.fill(x - 1, pictureTop - 1, x + textW + 1, y - 3, 0xB0202020.toInt())
+        }
         for (row in s.rows) {
             if (row.heading) {
                 graphics.text(font, row.text, x, y, WHITE, false)
@@ -843,10 +1063,6 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
     }
 
-    private fun drawPinButton(graphics: GuiGraphicsExtractor, r: Rect, pinned: Boolean, mouseX: Int, mouseY: Int) {
-        drawButton(graphics, r, if (pinned) "Unpin" else pinLabel, mouseX, mouseY, pinned)
-    }
-
     private fun drawCheckbox(graphics: GuiGraphicsExtractor, x: Int, y: Int, checked: Boolean) {
         graphics.fill(x, y, x + 9, y + 9, SLOT_BORDER)
         graphics.fill(x + 1, y + 1, x + 8, y + 8, SLOT_BACKGROUND)
@@ -861,6 +1077,11 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             val line = tree.getOrNull(first + i) ?: break
             val row = line.row
             val y = listTop + i * rowH
+            val pill = line.pill
+            if (pill != null) {
+                drawPill(graphics, line, pill, y, mouseX, mouseY)
+                continue
+            }
             val hover = mouseX in listLeft until right && mouseY in y until y + rowH
             drawCard(graphics, listLeft, y, right, hover, row.path == selPath, row.depth == 0)
             val color = if (line.covered) GOOD_TEXT else BAD_TEXT
@@ -875,6 +1096,64 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         drawScrollbar(graphics, GreenhouseView.ROSE_DRAGON.ordinal, listRight - 4)
         if (loading) graphics.text(font, "§7Mutation requirements appear once the data loads.", listLeft, listBottom - 10, WHITE, false)
         if (sideOpen) drawSide(graphics, rose, mouseX, mouseY)
+    }
+
+    /** A rounded box: cut corners, [fill] in the middle, one pixel of [outline] around it. */
+    private fun roundBox(graphics: GuiGraphicsExtractor, x0: Int, y0: Int, x1: Int, y1: Int, outline: Int, fill: Int) {
+        // Full capsule: the ends are half circles as tall as the pill.
+        fun shape(a: Int, b: Int, c: Int, d: Int, color: Int) {
+            val r = (d - b) / 2.0
+            for (row in b until d) {
+                val dy = row + 0.5 - (b + r)
+                val inset = Math.round(r - Math.sqrt((r * r - dy * dy).coerceAtLeast(0.0))).toInt()
+                graphics.fill(a + inset, row, c - inset, row + 1, color)
+            }
+        }
+        shape(x0, y0, x1, y1, outline)
+        shape(x0 + 1, y0 + 1, x1 - 1, y1 - 1, fill)
+    }
+
+    /** One pill of the Rose Dragon tree: connector lines, then count badge, icon, name, ingredients, held/needed and the -/+ button. */
+    private fun drawPill(graphics: GuiGraphicsExtractor, line: TreeLine, pill: Pill, y: Int, mouseX: Int, mouseY: Int) {
+        val row = line.row
+        val ph = rowH - 1
+        val mid = y + ph / 2
+        // Column c's line sits under the left end of the pill one level up.
+        for (c in 1..row.depth.coerceAtMost(MAX_PILL_DEPTH)) {
+            val lx = listLeft + 4 + (c - 1) * PILL_INDENT + 6
+            if (pill.guides[c]) graphics.fill(lx, y, lx + 1, y + rowH, GRID_LINE)
+            else if (c == row.depth) graphics.fill(lx, y, lx + 1, mid + 1, GRID_LINE)
+            if (c == row.depth) graphics.fill(lx, mid, pill.x0, mid + 1, GRID_LINE)
+        }
+        val hover = mouseX in pill.x0 until pill.x1 && mouseY in y until y + ph
+        roundBox(graphics, pill.x0, y, pill.x1, y + ph, pill.outline, if (row.path == selPath) NEXT_BACKGROUND else if (hover) PANEL_LIGHT else CARD)
+        val ty = y + (ph - 8) / 2 + 1
+        var x = pill.x0 + 3
+        // Dark box with a thin dark-blue border and clipped corners.
+        graphics.fill(x, y + 2, x + pill.badgeWidth, y + ph - 2, BADGE_BORDER)
+        graphics.fill(x + 1, y + 3, x + pill.badgeWidth - 1, y + ph - 3, SLOT_BACKGROUND)
+        for (cx in intArrayOf(x, x + pill.badgeWidth - 1)) for (cy in intArrayOf(y + 2, y + ph - 3)) graphics.fill(cx, cy, cx + 1, cy + 1, CARD)
+        val textColor = if (row.greyed) DIMMED_TEXT else WHITE
+        graphics.text(font, pill.badge, x + 3, ty, textColor, false)
+        x += pill.badgeWidth + 3
+        icon(graphics, row.icon, x, y + 1, ph - 2)
+        x += ph - 2 + 3
+        graphics.text(font, pill.name, x, ty, textColor, false)
+        x += font.width(pill.name) + 6
+        if (pill.crops.isNotEmpty()) {
+            graphics.text(font, pill.crops, x, ty, WHITE, false)
+            x += pill.cropsWidth + 6
+        }
+        if (pill.summary.isNotEmpty()) {
+            graphics.text(font, pill.summary, x, ty, textColor, false)
+            x += font.width(pill.summary) + 6
+        }
+        if (line.fitText.isNotEmpty()) {
+            graphics.text(font, line.fitText, x, ty, BAD_TEXT, false)
+            x += line.fitWidth + 6
+        }
+        graphics.text(font, line.counts, x, ty, if (row.greyed) DIMMED_TEXT else if (line.covered) GOOD_TEXT else BAD_TEXT, false)
+        if (row.expandable) graphics.text(font, if (row.expanded) "-" else "+", pill.x1 - 4 - font.width("+"), ty, if (hover && mouseX >= pill.x1 - 8 - font.width("+")) WHITE else TITLE_COLOR, false)
     }
 
     /** The side panel: a title with its icon, then the layout (or a note), the legend and small extra lines. */
@@ -901,11 +1180,6 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             y += 9
         }
         val shown = s.picture ?: return
-        // The pin button sits between the round lines and the grid.
-        val label = if (rosePinned) "Unpin" else pinLabel
-        pinRose.set(x, y + 1, font.width(label) + 10, BUTTON_H - 2)
-        drawPinButton(graphics, pinRose, rosePinned, mouseX, mouseY)
-        y += BUTTON_H
         drawPicture(graphics, shown, x, y + 3, w, listBottom - y - 3, s.extra)
     }
 
@@ -948,10 +1222,12 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             planResult = null
             planFor = mutation.id
             picture = layout?.let { makePicture(it, it.target) }
+            // Only a layout counts; a failed plan leaves the overlay on the last good one.
+            if (layout != null) GreenhouseOverlay.show(layout)
         }
         val shown = picture
         if (planFor == mutation.id && layout == null && !planning) {
-            graphics.text(font, "§cNo layout found", bx + bw + 8, listTop + 4, WHITE, false)
+            graphics.text(font, "§c${ellipsize(planError ?: "No layout found", left + panelWidth - 8 - (bx + bw + 8))}", bx + bw + 8, listTop + 4, WHITE, false)
         } else if (shown != null && planFor == mutation.id) {
             val gy = listTop + BUTTON_H + 6
             drawPicture(graphics, shown, bx, gy, left + panelWidth - 8 - bx, listBottom - gy, emptyList())
@@ -1058,8 +1334,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     }
 
     /** Draws the soil key (colour chip, letter, name) at [x],[y]; returns the y below it. */
-    private fun drawSoilKey(graphics: GuiGraphicsExtractor, shown: Picture, x: Int, y: Int, maxW: Int): Int {
-        val soils = soilsOf(shown)
+    private fun drawSoilKey(graphics: GuiGraphicsExtractor, shown: Picture, x: Int, y: Int, maxW: Int): Int = drawSoilChips(graphics, soilsOf(shown), x, y, maxW)
+
+    private fun drawSoilChips(graphics: GuiGraphicsExtractor, soils: List<String>, x: Int, y: Int, maxW: Int): Int {
         if (soils.isEmpty()) return y
         var ly = y
         var sx = x
@@ -1235,14 +1512,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             }
         }
         if (plotsOpen) return plotsClicked(mx, my)
-        if (view == GreenhouseView.PLANNER && plannerSide.picture != null && !plannerSide.busy && pinPlanner.contains(mx, my)) {
+        if (view == GreenhouseView.PLANNER && skyError != null && !plannerSide.busy && retryButton.contains(mx, my)) {
             endFocus()
-            togglePin(plannerSide, plannerPinned)
-            return true
-        }
-        if (view == GreenhouseView.ROSE_DRAGON && sideOpen && rose.picture != null && !rose.busy && pinRose.contains(mx, my)) {
-            endFocus()
-            togglePin(rose, rosePinned)
+            retry()
             return true
         }
         if (view == GreenhouseView.ROSE_DRAGON && sideOpen && mx >= sideLeft + sideWidth - 12 && mx < sideLeft + sideWidth && my >= listTop && my < listTop + 14) {
@@ -1277,7 +1549,12 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
                 val line = tree.getOrNull(index)
                 if (line != null) {
                     val row = line.row
-                    if (row.expandable && mx < listLeft + 4 + row.depth * 10 + 12) toggleExpanded(row.path) else selectItem(row)
+                    val pill = line.pill
+                    if (pill != null) {
+                        if (mx in pill.x0 until pill.x1) {
+                            if (row.expandable && (row.id == null && row.path == GreenhouseTree.ROOT_PATH || mx >= pill.x1 - 8 - font.width("+"))) toggleExpanded(row.path) else selectItem(row)
+                        }
+                    } else if (row.expandable && mx < listLeft + 4 + row.depth * 10 + 12) toggleExpanded(row.path) else selectItem(row)
                     handled = true
                 }
             }
@@ -1442,6 +1719,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
     // Row caps
 
+    /** A cap is a heuristic search result: an amount the shown plan really placed proves the row fits at least that many. */
+    private fun provenCap(cap: Int, amount: Int, placed: Int): Int = if (cap >= 0 && amount > cap && placed >= amount) amount else cap
+
     private fun mixHash(x: Long): Long {
         var z = x + -0x61c8864680b583ebL
         z = (z xor (z ushr 30)) * -0x40a7b892e31b1a47L
@@ -1479,15 +1759,20 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
     private fun startCap(req: CapRequest) {
         capRunning = true
-        val planner = Greenhouse.planner
         val data = Greenhouse.data
         Safe.background("greenhouse cap") {
+            var failed = false
             val cap = try {
-                GhMax.capAlongside(planner, data, req.amounts, req.id, req.mask) ?: NO_CAP
+                GhMax.capAlongside(data, req.amounts, req.id, req.mask) ?: NO_CAP
+            } catch (e: SkyShardsException) {
+                skyError = e.text
+                failed = true
+                NO_CAP
             } catch (_: Throwable) {
+                failed = true
                 NO_CAP
             }
-            capAnswers.add(CapAnswer(req.key, req.id, cap))
+            capAnswers.add(CapAnswer(req.key, req.id, cap, failed))
         }
     }
 
@@ -1497,6 +1782,8 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             val a = capAnswers.poll() ?: break
             any = true
             capRunning = false
+            // A failed solve is not remembered: the next change asks again.
+            if (a.failed) continue
             capCache[a.key] = a.cap
             // Only a cap for what is typed now counts; a newer change has asked for its own.
             if (capKey(a.id) == a.key) applyCap(a.id, a.cap)
@@ -1533,6 +1820,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     /** Stores a Planner amount; 0 is the default and is not stored. */
     private fun putAmount(id: String, value: Int) {
         if (value <= 0) saved.planAmounts.remove(id) else saved.planAmounts[id] = value
+        lastEdited = id
         Storage.markDirty()
     }
 
@@ -1540,6 +1828,15 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private fun markMixStale(immediate: Boolean) {
         mixStale = true
         mixDirtyAt = if (immediate) ticks - MIX_DEBOUNCE_TICKS else ticks
+        // The solve still running is out of date: stop it now (its job is cancelled on the server), the new one starts after the pause.
+        mixGeneration++
+    }
+
+    /** The Retry button: ask SkyShards again for what is typed. */
+    private fun retry() {
+        skyError = null
+        markMixStale(true)
+        buildPlannerSide()
     }
 
     private fun toggleOneOfEach() {
@@ -1557,6 +1854,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         capTouched = null
         capPending = null
         capNote = ""
+        skyError = null
         maxGeneration++
         maxRunning = false
         mixGeneration++
@@ -1618,18 +1916,17 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     private fun startMax(row: String?) {
         val data = Greenhouse.data
         if (maxRunning || !data.ready) return
-        val analysed = saved.analysed.toSet()
         val every = uniqueOrder(data.mutations).map { it.id }
         val plan = saved.planAmounts
         val candidates = every.filter { (plan[it] ?: 0) > 0 }.ifEmpty { every }
         val typed = if (row != null) HashMap(plan) else null
         val copy = usableMask.copyOf()
-        val planner = Greenhouse.planner
         val oneOfEach = row == null && saved.planOneOfEach
         maxKey = if (row != null) capKey(row) else 0L
         capNote = ""
         capTouched = null
-        val budget = if (row != null) GhMax.ALONGSIDE_BUDGET_MILLIS else GhMax.DEFAULT_BUDGET_MILLIS
+        skyError = null
+        skyProgress = ""
         maxRunning = true
         maxRow = row
         maxDone = false
@@ -1642,6 +1939,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         plannerSide.busy = true
         plannerSide.busyText = "Working..."
         val generation = ++maxGeneration
+        val progress = { text: String -> if (generation == maxGeneration) skyProgress = text }
         Safe.background("greenhouse max") {
             var along: GhPlaceResult? = null
             var result: GhMaxResult? = null
@@ -1650,11 +1948,22 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             try {
                 // What max claims is then planned again from scratch; whichever places more (never fewer than claimed) is shown.
                 if (row != null) {
-                    along = GhMax.maxAlongside(planner, data, typed!!, row, copy, budget, stale)
-                    plan = GhMax.settle(planner, data, along, copy, GhMax.REPLAN_BUDGET_MILLIS, stale)
+                    along = GhMax.maxAlongside(data, typed!!, row, copy, stale, progress)
+                    plan = GhMax.settle(data, along, copy, stale, progress)
                 } else {
-                    result = GhMax.solve(planner, data, candidates, copy, analysed, budget, oneOfEach)
-                    plan = GhMax.settle(planner, data, GhPlaceResult(result.counts, result.layout, emptyMap(), result.counts, result.stocked, result.totalCells), copy, GhMax.REPLAN_BUDGET_MILLIS, stale)
+                    result = GhMax.solve(data, candidates, copy, oneOfEach, stale, progress)
+                    plan = GhMax.settle(data, GhPlaceResult(result.counts, result.layout, emptyMap(), result.counts, result.stocked, result.totalCells), copy, stale, progress)
+                }
+            } catch (e: SkyShardsException) {
+                if (generation == maxGeneration) skyError = e.text
+                along = null
+                result = null
+                plan = null
+                // A Max that timed out offers the last cached layout for these squares, greyed like any other failure.
+                if (e.timedOut) SkyShards.lastCached(copy)?.let { saved ->
+                    val counts = saved.solution.counts.filterValues { it > 0 }
+                    plan = GhPlaceResult(counts, counts.keys.firstOrNull()?.let(saved.solution::layout), emptyMap(), counts, emptyList(), saved.solution.usedCells)
+                    maxFallbackAt = saved.at
                 }
             } catch (_: Throwable) {
             }
@@ -1676,14 +1985,25 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             // The row's max is its cap for these other rows: remember it (-1 when the others do not fit on their own).
             capCache[maxKey] = if (along.unplaced.keys.any { it != row }) NO_CAP else (along.placed[row] ?: 0)
             mixShown = maxPlan ?: along
+            mixShownAt = System.currentTimeMillis()
             mixStale = false
             rebuild()
+            return
+        }
+        if (result == null && skyError != null) {
+            // SkyShards failed: keep the amounts and the last good plan (greyed, with Retry). A timed-out Max brings its cached layout.
+            maxPlan?.let {
+                mixShown = it
+                mixShownAt = maxFallbackAt
+                mixStale = false
+            }
+            buildPlannerSide()
             return
         }
         if (result == null) {
             // No answer: keep the amounts and show the old plan again.
             mixShown = null
-            plannerSide.lines = wrap("§cNo answer: the planner could not be run.", sideWidth)
+            plannerSide.lines = wrap("§c${skyError ?: "No answer: the planner could not be run."}", sideWidth)
             plannerSide.picture = null
             plannerSide.rows = emptyList()
             return
@@ -1692,6 +2012,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         for (m in Greenhouse.data.mutations) if (m.id !in GreenhouseGoals.skippedMutations) putAmount(m.id, result.counts[m.id] ?: 0)
         capBase.clear()
         mixShown = maxPlan ?: GhPlaceResult(result.counts, result.layout, emptyMap(), result.counts, result.stocked, result.totalCells)
+        mixShownAt = System.currentTimeMillis()
         mixStale = false
         rebuild()
     }
@@ -1718,13 +2039,18 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             return
         }
         val copy = usableMask.copyOf()
-        val planner = Greenhouse.planner
         val generation = mixGeneration
+        val edited = lastEdited
+        skyError = null
+        skyProgress = ""
         mixWorking = true
         mixDone = false
         Safe.background("greenhouse mix") {
             val result = try {
-                GhMax.replan(planner, data, amounts, copy, GhMax.REPLAN_BUDGET_MILLIS) { generation != mixGeneration }
+                GhMax.replan(data, amounts, copy, { generation != mixGeneration }, { if (generation == mixGeneration) skyProgress = it }, edited)
+            } catch (e: SkyShardsException) {
+                if (generation == mixGeneration) skyError = e.text
+                null
             } catch (_: Throwable) {
                 null
             }
@@ -1746,16 +2072,25 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         s.icon = null
         s.extra = emptyList()
         s.summary = ""
+        val failure = skyError?.let { wrap("§c$it", w) } ?: emptyList()
         if (result == null || result.requestedTotal <= 0 || !data.ready) {
-            s.lines = (if (capNote.isEmpty()) emptyList() else wrap("§e$capNote", w)) + wrap("§7Type an amount for a mutation, or press Max for the best mix. The layout, what does not fit and the crops needed show here.", w)
+            s.lines = failure + (if (capNote.isEmpty()) emptyList() else wrap("§e$capNote", w)) + wrap("§7Type an amount for a mutation, or press Max for the best mix. The layout, what does not fit and the crops needed show here.", w)
             s.picture = null
             s.rows = emptyList()
             mixPictureFor = null
+            // No plan to show: the overlay clears too (a SkyShards failure never gets here, it keeps the saved plan).
+            // Only the Planner view owns the overlay here: the Rose panel's layout must survive a planner rebuild.
+            if (skyError == null && view == GreenhouseView.PLANNER) GreenhouseOverlay.show(null)
             return
         }
         val kinds = result.placed.size
         val lines = ArrayList<String>(4)
         val usable = unlocked - blockedCount
+        lines += failure
+        // The old plan stays, greyed, with the time it was worked out.
+        val offline = skyError != null
+        if (offline) lines +="§7Saved plan from ${java.time.LocalTime.ofInstant(java.time.Instant.ofEpochMilli(mixShownAt), java.time.ZoneId.systemDefault()).withNano(0).toString().take(5)}"
+        val greyFrom = lines.size
         if (capNote.isNotEmpty()) lines += wrap("§e$capNote", w)
         if (result.note.isNotEmpty()) lines += wrap("§c${result.note}", w)
         if (result.placedTotal <= 0) lines += "§cPlanned: nothing fits on $usable squares"
@@ -1764,11 +2099,13 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             lines += wrap(s.summary, w)
         }
         if (result.rounds > 0) lines += "§bx${result.rounds} rounds §7(${result.placedTotal} of ${result.requestedTotal} fit at once)"
+        if (offline) for (i in greyFrom until lines.size) lines[i] = "§8" + strip(lines[i])
         s.lines = lines
         if (mixPictureFor !== result) {
             mixPictureFor = result
             s.picture = result.layout?.let { makePicture(it, null) }
             val layout = result.layout
+            GreenhouseOverlay.show(layout)
             reuseLine = if (layout == null) "" else GhReuse.of(reuseBase, layout)?.text() ?: ""
             if (layout != null) reuseBase = layout
         }
@@ -1795,6 +2132,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         }
         neededRows(rows, "Crops needed", crops, data, stock, w)
         neededRows(rows, "Mutations needed", mutations, data, stock, w)
+        if (offline) for (i in rows.indices) rows[i] = rows[i].let { SideRow(it.icon, "§8" + strip(it.text), it.heading, it.counts, DIMMED_TEXT, it.countWidth) }
         s.rows = rows
     }
 
@@ -1807,27 +2145,6 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             val countWidth = font.width(counts)
             rows += SideRow(id, ellipsize(data.nameOf(id), w - 13 - countWidth - 6), counts = counts, countColor = if (have == null) UNKNOWN_TEXT else if (have >= n) GOOD_TEXT else BAD_TEXT, countWidth = countWidth)
         }
-    }
-
-    // Pin to screen
-
-    /** What [side] shows right now as a pin, or null when it has no layout. The title is the panel's own, without colour codes. */
-    private fun snapshot(side: Side): PinnedPlot? {
-        val shown = side.picture?.layout ?: return null
-        return PinnedPlot.of(shown.cells, strip(if (side === rose) rose.title else "Planned layout"), side.summary)
-    }
-
-    /** Pins what [side] shows, or removes the pin when [pinned] says this panel is the pinned one. */
-    private fun togglePin(side: Side, pinned: Boolean) {
-        if (pinned) GreenhousePin.unpin() else GreenhousePin.pin(snapshot(side) ?: return)
-        refreshPinFlags()
-    }
-
-    /** Whether the pin on the screen is the same as what each panel shows; recomputed when the panels or the pin change. */
-    private fun refreshPinFlags() {
-        val pin = GreenhousePin.current
-        plannerPinned = pin != null && snapshot(plannerSide)?.sameAs(pin) == true
-        rosePinned = pin != null && snapshot(rose)?.sameAs(pin) == true
     }
 
     // Plot side panel
@@ -1870,11 +2187,15 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             return
         }
         rose.busy = true
+        panelError = null
         val generation = panelGeneration
         val copy = usableMask.copyOf()
         Safe.background("greenhouse panel") {
             val result = try {
                 Greenhouse.planner.plan(target, copy)
+            } catch (e: SkyShardsException) {
+                if (generation == panelGeneration) panelError = e.text
+                null
             } catch (_: Throwable) {
                 null
             }
@@ -1891,6 +2212,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
             rose.picture = null
             val state = fit.check(id)
             val why = when {
+                panelError != null -> "§c$panelError"
                 state > 0 -> "§cNo room: needs $state more squares than the $unlocked unlocked. Open Plots to unlock more."
                 state == GreenhouseFit.NO_FIT -> "§cDoes not fit the $unlocked unlocked squares as they are placed. Open Plots to unlock more."
                 id in GreenhouseGoals.skippedMutations -> "§cNot included yet: the mod is being updated for it."
@@ -1908,6 +2230,7 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         rose.lines = if (panelRounds > 1) listOf("§bx$panelRounds rounds", "§7$perRound per round") else listOf("§aOne round")
         rose.summary = if (panelRounds > 1) "§bx$panelRounds rounds§7, $perRound per round" else "§aOne round"
         rose.picture = makePicture(result, id)
+        GreenhouseOverlay.show(result)
     }
 
     private fun clearPlan() {
@@ -1925,11 +2248,15 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         if (planning) return
         clearPlan()
         planning = true
+        planError = null
         val generation = planGeneration
         val copy = usableMask.copyOf()
         Safe.background("greenhouse planner") {
             val result = try {
                 Greenhouse.planner.plan(target, copy)
+            } catch (e: SkyShardsException) {
+                if (generation == planGeneration) planError = e.text
+                null
             } catch (_: Throwable) {
                 null
             }
@@ -1969,14 +2296,20 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     fun dropdownOptionCenter(index: Int) = intArrayOf(dropdownX + dropdownWidth / 2, top + 5 + DD_H + index * DD_H + DD_H / 2)
     fun allRowCenter(visibleIndex: Int) = intArrayOf(listLeft + 20, listTop + visibleIndex * rowH + rowH / 2)
     fun planButtonCenter() = intArrayOf(gridLeft + 20, listTop + BUTTON_H / 2)
-    fun treeArrowCenter(visibleIndex: Int) = intArrayOf(listLeft + 4 + (tree.getOrNull(scroll[view.ordinal] + visibleIndex)?.row?.depth ?: 0) * 10 + 5, listTop + visibleIndex * rowH + rowH / 2)
-    fun treeTextCenter(visibleIndex: Int) = intArrayOf(listLeft + 4 + (tree.getOrNull(scroll[view.ordinal] + visibleIndex)?.row?.depth ?: 0) * 10 + 14 + iconSize + 12, listTop + visibleIndex * rowH + rowH / 2)
+    fun treeArrowCenter(visibleIndex: Int): IntArray {
+        val pill = tree.getOrNull(scroll[view.ordinal] + visibleIndex)?.pill
+        if (pill != null) return intArrayOf(pill.x1 - 4 - font.width("+") / 2, listTop + visibleIndex * rowH + rowH / 2)
+        return intArrayOf(listLeft + 4 + (tree.getOrNull(scroll[view.ordinal] + visibleIndex)?.row?.depth ?: 0) * 10 + 5, listTop + visibleIndex * rowH + rowH / 2)
+    }
+    fun treeTextCenter(visibleIndex: Int): IntArray {
+        val pill = tree.getOrNull(scroll[view.ordinal] + visibleIndex)?.pill
+        if (pill != null) return intArrayOf(pill.x0 + 3 + pill.badgeWidth + 6 + rowH + 4, listTop + visibleIndex * rowH + rowH / 2)
+        return intArrayOf(listLeft + 4 + (tree.getOrNull(scroll[view.ordinal] + visibleIndex)?.row?.depth ?: 0) * 10 + 14 + iconSize + 12, listTop + visibleIndex * rowH + rowH / 2)
+    }
     fun plotsButtonCenter() = intArrayOf(plotsButton.x + plotsButton.w / 2, plotsButton.y + plotsButton.h / 2)
     fun maxButtonCenter() = intArrayOf(maxButton.x + maxButton.w / 2, maxButton.y + maxButton.h / 2)
     fun plannerMinusCenter(visibleIndex: Int) = intArrayOf(plannerMinusX + STEP_W / 2, uniqueRowY(visibleIndex))
     fun plannerPlusCenter(visibleIndex: Int) = intArrayOf(plannerPlusX + STEP_W / 2, uniqueRowY(visibleIndex))
-    fun pinPlannerCenter() = intArrayOf(pinPlanner.x + pinPlanner.w / 2, pinPlanner.y + pinPlanner.h / 2)
-    fun pinRoseCenter() = intArrayOf(pinRose.x + pinRose.w / 2, pinRose.y + pinRose.h / 2)
     fun blockModeCenter() = intArrayOf(blockButton.x + blockButton.w / 2, blockButton.y + blockButton.h / 2)
     fun unblockAllCenter() = intArrayOf(unblockButton.x + unblockButton.w / 2, unblockButton.y + unblockButton.h / 2)
     fun plotCellCenter(row: Int, col: Int) = intArrayOf(plotsGrid.x + col * plotsCell + plotsCell / 2, plotsGrid.y + row * plotsCell + plotsCell / 2)
@@ -1991,8 +2324,6 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     val unlockedSquares get() = unlocked
     val blockedSquares get() = blockedCount
     val blockModeOn get() = blockMode
-    val plannerIsPinned get() = plannerPinned
-    val roseIsPinned get() = rosePinned
 
     /** How many icons the last drawn frame contained (rows, grid blocks, legend). */
     val iconsDrawn get() = iconsLastFrame
@@ -2004,6 +2335,12 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
     val plannerLayout get() = plannerSide.picture?.layout
     val plannerBlockIds get() = plannerSide.picture?.blockId?.toList() ?: emptyList()
     val maxBusy get() = maxRunning
+
+    /** Compact Planner geometry for the layout checks: where the soil key ended, where the disclaimer starts, the widest "max N" label and the room for it. */
+    val plannerKeyBottom get() = keyBottomDrawn
+    val disclaimerTop get() = footerY - 3 - disclaimer.size * 9 + 1
+    val plannerMaxLabelWidest get() = plannerRows.maxOfOrNull { font.width(if (it.cap >= 0) "max ${it.cap}" else "max") } ?: 0
+    val plannerMaxRoom get() = plannerMaxW - 3
 
     /** True while the Planner is working out a layout (Max or typed amounts). */
     val plannerBusy get() = maxRunning || mixWorking || mixStale || capRunning || capPending != null || capTouched != null || capAnswers.isNotEmpty()
@@ -2028,6 +2365,9 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
 
     /** The visible tree as plain `label counts` strings. */
     fun treeText(): List<String> = tree.map { strip("${"  ".repeat(it.row.depth)}${if (it.row.expandable) (if (it.row.expanded) "v " else "> ") else ""}${it.label} ${it.counts}") }
+
+    /** The root pill's crop-total text ("Crops 12/340"), or empty when it is not shown. */
+    fun rootCropText(): String = strip(tree.firstOrNull { it.row.path == GreenhouseTree.ROOT_PATH }?.pill?.crops ?: "")
 
     /** The visible unique rows as plain `name fit` strings. */
     fun uniqueText(): List<String> = unique.map { strip("${it.label} ${it.fitText}").trim() }
@@ -2066,7 +2406,10 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         private const val MAX_AMOUNT = 9999
         private const val LEGEND_ICON = 10
         private const val LEGEND_H = 12
+        private const val KEY_H = 12
         private const val FOUND_W = 28
+        private const val TAG_W = 11
+        private const val TAG_H = 10
         private const val MIX_DEBOUNCE_TICKS = 8
         private const val CAP_CACHE_SIZE = 256
         private const val NO_CAP = -1
@@ -2080,6 +2423,14 @@ class GreenhouseScreen : Screen(Component.literal("Greenhouse")) {
         private const val KEY_ENTER = 257
         private const val KEY_BACKSPACE = 259
         private const val KEY_KP_ENTER = 335
+
+        private const val MAX_PILL_DEPTH = 7
+        private const val PILL_INDENT = 12
+        private val COUNT_X = Regex("(\\d)x ")
+        private const val BADGE_BORDER = 0xFF1B2A4A.toInt()
+        private const val PILL_ROOT_OUTLINE = 0xFFFF5555.toInt()
+        private const val PILL_CROP_OUTLINE = 0xFF454545.toInt()
+        private const val PILL_FARM_NEXT_OUTLINE = 0xFFFFAA00.toInt()
 
         private const val WHITE = -1
         private const val TITLE_COLOR = 0xFFA0A0A0.toInt()

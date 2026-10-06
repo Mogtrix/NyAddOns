@@ -2,7 +2,7 @@ package dev.nytrix.nyaddons.features.greenhouse
 
 import dev.nytrix.nyaddons.NyAddOns
 
-/** How a soil is drawn in the planner and the pinned plot, so both views always agree. */
+/** How a soil is drawn in the planner and the soil picture views, so they always agree. */
 object GhSoil {
 
     const val EDGE = 0xFF101010.toInt()

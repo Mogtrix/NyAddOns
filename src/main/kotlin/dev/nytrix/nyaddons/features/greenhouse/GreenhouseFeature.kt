@@ -24,12 +24,35 @@ object GreenhouseFeature : Feature {
             if (config.enabled && SkyBlockData.area == "Garden") Greenhouse.data.request()
         }
         ClientTickEvents.END_CLIENT_TICK.register { mc -> site { pollKey(mc) } }
-        GreenhousePin.register()
+        GreenhouseOverlay.init()
+        ClientTickEvents.END_CLIENT_TICK.register { mc -> site { GreenhouseOverlay.tick(mc) } }
     }
 
     override fun commands(): List<Command> = if (config.shortCommand) listOf(command("gh")) else emptyList()
 
-    override fun subcommands(): List<Command> = listOf(command("greenhouse"))
+    override fun subcommands(): List<Command> = listOf(command("greenhouse").then(ClientCommands.literal("bench").executes { site { bench() }; 1 }))
+
+    /** `/ny greenhouse bench`: times SkyShards (cold, again, cached, three at once) and prints each run in chat; every run is also in skyshards-timing.log. */
+    private fun bench() {
+        val data = Greenhouse.data
+        if (!data.ready) {
+            ChatUtils.chat("§cThe Greenhouse data is not loaded yet.")
+            return
+        }
+        val ids = data.mutations.map { it.id }.filter { it !in GreenhouseGoals.skippedMutations }.distinct()
+        if (ids.size < 5) return
+        val sets = listOf(
+            "one mutation" to listOf(SkyGoal(ids[0], 1)),
+            "five mutations" to ids.take(5).map { SkyGoal(it, 1) },
+            "max of all" to ids.map { SkyGoal(it, null) },
+        )
+        ChatUtils.chat("§eTiming SkyShards: ${sets.size} sets, a few minutes at most. Results also go to config/nyaddons/skyshards-timing.log.")
+        val mask = BooleanArray(100) { true }
+        Safe.background("greenhouse bench") {
+            SkyShards.benchmark(sets, mask) { line -> Minecraft.getInstance().execute { ChatUtils.chat("§7$line") } }
+            Minecraft.getInstance().execute { ChatUtils.chat("§aSkyShards timing finished.") }
+        }
+    }
 
     private fun command(name: String): Command = ClientCommands.literal(name).executes { site { open() }; 1 }
 

@@ -17,8 +17,8 @@ object Downloads {
 
     private const val MAX_AGE_MILLIS = 24 * 60 * 60 * 1000L
 
-    // One client for every download: each client keeps a selector thread of its own alive.
-    private val client: HttpClient by lazy { HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build() }
+    // One client for every download and the Greenhouse solver: each client keeps a selector thread of its own alive.
+    val client: HttpClient by lazy { HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build() }
 
     /**
      * Brings the copy of a JSON file at [target] up to date, at most once a day. Runs on the calling thread, so call it from a

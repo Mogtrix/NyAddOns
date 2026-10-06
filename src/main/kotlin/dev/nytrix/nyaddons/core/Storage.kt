@@ -58,52 +58,12 @@ class GreenhouseProfile {
     /** Unlocked squares the planner must keep empty: same 100 character form, `1` blocked. Empty means none. */
     var blocked = ""
 
-    /** The plot pinned to the screen, a snapshot of what a side panel showed; null when nothing is pinned. */
-    var pin: PinnedPlot? = null
+    /** Where the plan's top-left square sits in the world, set by Align; null until then. */
+    var overlayOrigin: OverlayOrigin? = null
 }
 
-/**
- * A layout kept for the HUD: [palette] lists the ids used, [cells] has 100 characters (row-major), `.` for an empty square and
- * otherwise the position of the id in [palette] as a character of [PinnedPlot.CHARS]. [title] and [summary] are the panel's text.
- */
-class PinnedPlot(
-    var title: String = "",
-    var summary: String = "",
-    var palette: MutableList<String> = mutableListOf(),
-    var cells: String = "",
-) {
-    /** The id on the square at [index] (row * 10 + column), or null when empty. */
-    fun idAt(index: Int): String? {
-        val c = cells.getOrNull(index) ?: return null
-        val i = CHARS.indexOf(c)
-        return if (i < 0) null else palette.getOrNull(i)
-    }
-
-    fun sameAs(other: PinnedPlot) = cells == other.cells && summary == other.summary && palette == other.palette && title == other.title
-
-    companion object {
-        const val CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-        /** Packs a 10x10 grid of ids; ids beyond the 62 the alphabet holds are left out. */
-        fun of(cells: Array<Array<String?>>, title: String, summary: String): PinnedPlot {
-            val palette = mutableListOf<String>()
-            val out = StringBuilder(100)
-            for (row in cells) for (id in row) {
-                if (id == null) {
-                    out.append('.')
-                    continue
-                }
-                var i = palette.indexOf(id)
-                if (i < 0 && palette.size < CHARS.length) {
-                    palette += id
-                    i = palette.size - 1
-                }
-                out.append(if (i < 0) '.' else CHARS[i])
-            }
-            return PinnedPlot(title, summary, palette, out.toString())
-        }
-    }
-}
+/** The block the overlay's row 0, column 0 square is on: columns run east (+x), rows run south (+z). */
+class OverlayOrigin(var x: Int = 0, var y: Int = 0, var z: Int = 0)
 
 /** Data that belongs to one SkyBlock profile. */
 class ProfileData {

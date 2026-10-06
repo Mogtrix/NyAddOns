@@ -2,15 +2,11 @@ package dev.nytrix.nyaddons.test.greenhouse
 
 import dev.nytrix.nyaddons.NyAddOns
 import dev.nytrix.nyaddons.config.GreenhouseView
-import dev.nytrix.nyaddons.core.PinnedPlot
-import dev.nytrix.nyaddons.features.greenhouse.GreenhousePin
-import dev.nytrix.nyaddons.gui.OverlayManager
 import dev.nytrix.nyaddons.features.greenhouse.GhCrop
 import dev.nytrix.nyaddons.features.greenhouse.GhData
 import dev.nytrix.nyaddons.features.greenhouse.GhLayout
 import dev.nytrix.nyaddons.features.greenhouse.GhMutation
 import dev.nytrix.nyaddons.features.greenhouse.GhPlanner
-import dev.nytrix.nyaddons.features.greenhouse.PlannerCore
 import dev.nytrix.nyaddons.features.greenhouse.GhRequirement
 import dev.nytrix.nyaddons.features.greenhouse.GhSoil
 import dev.nytrix.nyaddons.features.greenhouse.GhStock
@@ -71,16 +67,6 @@ class GreenhouseSoilTest : FabricClientGameTest {
                 context.input.resizeWindow(1280, 720)
                 // The six-soil picture stays as the colour reference (made-up crops, one per soil).
                 shot(context, "all-six", crops.map { it.id })
-                // Real mutations: the planner's own layout, real names and crop icons.
-                for (id in listOf("ashwreath", "zombud", "veilshroom", "chorus_fruit", "magic_jellybean")) {
-                    val real = realDataFor(id)
-                    val core = PlannerCore(real)
-                    val layout = core.plan(real.mutations.first())
-                    val ids = layout?.cells?.flatMap { r -> r.filterNotNull() }?.distinct().orEmpty()
-                    val soils = ids.mapNotNull { c -> real.crops.firstOrNull { it.id == c }?.soil ?: real.mutation(c)?.soil }.toSet()
-                    NyAddOns.logger.info("[SoilShots] $id soils=$soils")
-                    if (layout != null && soils.size >= 2) shot(context, "real-$id", real, object : GhPlanner { override fun plan(target: GhMutation) = core.plan(target) })
-                }
             }
         } finally {
             context.runOnClient<RuntimeException> {
@@ -92,20 +78,6 @@ class GreenhouseSoilTest : FabricClientGameTest {
             System.clearProperty("nyaddons.devArea")
             context.setScreen { null }
             context.input.resizeWindow(854, 480)
-        }
-    }
-
-    /** The real SkyShards data with [targetId] first in the list, so the first All Mutations row is the one planned. */
-    private fun realDataFor(targetId: String): GhData {
-        val base = GreenhousePlannerTest.TestData()
-        val ordered = base.mutations.sortedBy { if (it.id == targetId) 0 else 1 }
-        return object : GhData {
-            override val ready = true
-            override val crops = base.crops
-            override val mutations = ordered
-            override fun mutation(id: String) = ordered.firstOrNull { it.id == id }
-            override fun nameOf(id: String) = mutation(id)?.name ?: base.crops.firstOrNull { it.id == id }?.name ?: id
-            override fun request() {}
         }
     }
 
@@ -138,21 +110,6 @@ class GreenhouseSoilTest : FabricClientGameTest {
         context.waitTicks(10)
         check(context.computeOnClient<Boolean, RuntimeException> { (it.screen as GreenhouseScreen).hasLayout }) { "no layout for $tag" }
         context.takeScreenshot("soil-$tag")
-        run {
-            context.setScreen { null }
-            context.runOnClient<RuntimeException> {
-                val first = shotData.mutations.first()
-                val layout = shotPlanner.plan(first)
-                GreenhousePin.pin(PinnedPlot.of(layout!!.cells, first.name, first.name))
-                OverlayManager.invalidate()
-            }
-            context.waitTicks(4)
-            context.takeScreenshot("soil-$tag-pinned-hud")
-            context.runOnClient<RuntimeException> { NyAddOns.openScreen { GreenhouseScreen() } }
-            context.waitForScreen(GreenhouseScreen::class.java)
-            context.waitTicks(3)
-            context.runOnClient<RuntimeException> { GreenhousePin.unpin() }
-        }
         context.setScreen { null }
     }
 }
